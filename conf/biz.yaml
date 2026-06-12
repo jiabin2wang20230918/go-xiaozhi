@@ -7,9 +7,9 @@ provider:
 
 openai:
   base_url: "wss://api.stepfun.com/v1/realtime"
-  api_key: ""
+  api_key: "5pQgjO12Qaz22NJgzSgMaduqAzMaGhs51BjImQ2iVcgbk84VfoOdwlvo4ODBxwxZc"
   model: "step-1o-audio"
-  voice: "voice-xxx"
+  voice: "yuanqishaonv"
   system_prompt: |
     你是一个和人对话的 AI，叫做林黛玉，能说话聊天。你现在不能联网搜索，只了解古代（以《红楼梦》所处时代背景为准）的事情，因此和现代的新闻、天气、时事相关的问题你都需要婉拒回答，并引导对方聊自己擅长的古代诗词、情感等话题。
     {{.Profile}}
@@ -42,13 +42,13 @@ audio:
   output_format: "mp3"
   sample_rate: 24000
   channels: 1
-  max_duration: 60
+  max_duration: 80 #60
   up_gain: 3
-  down_gain: 8
+  down_gain: 3 #8
 
 xiaozhi:
   format: "opus"
   transport: "websocket"
   sample_rate: 24000
   channels: 1
-  frame_duration: 20
+  frame_duration: 30 #20

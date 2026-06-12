@@ -118,7 +118,7 @@ func ReloadConfig() error {
 }
 
 func (c *BizConf) LoadEnv(v *viper.Viper) {
-	c.OpenAI.APIKey = strings.TrimSpace(v.GetString("XDIM_STEP_API_KEY"))
+	c.OpenAI.APIKey = strings.TrimSpace(v.GetString("openai.api_key"))
 	if c.OpenAI.APIKey == "" {
 		panic("api_key is required")
 	}

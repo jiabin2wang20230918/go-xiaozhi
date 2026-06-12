@@ -9,7 +9,7 @@ import (
 
 func main() {
 	server := handler.NewWebSocketServer()
-	if err := server.Start(":8000"); err != nil {
+	if err := server.Start(":80"); err != nil {
 		log.Fatal("Error starting server:", err)
 	}
 }
