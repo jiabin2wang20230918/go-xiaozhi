@@ -1,15 +1,16 @@
 package handler
 
 import (
-	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
-	"github.com/xdimtech/go-xiaozhi/handler/base"
-	"github.com/xdimtech/go-xiaozhi/handler/openai"
-	"github.com/xdimtech/go-xiaozhi/handler/xiaozhi"
+	"github.com/xdimtech/go-xiaozhi/handler/local"
 	"github.com/xdimtech/go-xiaozhi/pkg/config"
+	"github.com/xdimtech/go-xiaozhi/service/auth"
 
 	"github.com/gorilla/websocket"
 	"github.com/xdimtech/go-xiaozhi/pkg/utils"
@@ -17,18 +18,48 @@ import (
 
 type WebSocketServer struct {
 	requestCounter atomic.Int64
+	auth           *auth.Authenticator
+	mux            *http.ServeMux
 }
 
 func NewWebSocketServer() *WebSocketServer {
-	return &WebSocketServer{}
+	server := &WebSocketServer{
+		auth: auth.New(config.Get().Server.Auth),
+	}
+	server.mux = http.NewServeMux()
+	server.mux.HandleFunc("/xiaozhi/v1/", server.RealTime)
+	return server
+}
+
+func (s *WebSocketServer) Handler() http.Handler {
+	if s.mux != nil {
+		return s.mux
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/xiaozhi/v1/", s.RealTime)
+	return mux
 }
 
 func (s *WebSocketServer) Start(addr string) error {
-	http.HandleFunc("/xiaozhi/v1/", s.RealTime)
-	log.Printf("Server started at local: ws://127.0.0.1%s\n", addr)
+	if addr == "" {
+		addr = fmt.Sprintf("%s:%d", config.Server().IP, config.Server().Port)
+	}
+	log.Printf("Server started at local: %s\n", websocketURL("127.0.0.1", addr))
 	ip, _ := utils.GetLocalIP()
-	log.Printf("Server started at public: ws://%s%s\n", ip, addr)
-	return http.ListenAndServe(addr, nil)
+	log.Printf("Server started at public: %s\n", websocketURL(ip, addr))
+	server := &http.Server{
+		Addr:    addr,
+		Handler: s.Handler(),
+	}
+	return server.ListenAndServe()
+}
+
+func websocketURL(host string, listenAddr string) string {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil || port == "" {
+		return fmt.Sprintf("ws://%s/xiaozhi/v1/", strings.TrimRight(host, "/"))
+	}
+	return fmt.Sprintf("ws://%s:%s/xiaozhi/v1/", host, port)
 }
 
 func (s *WebSocketServer) wsConnect(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
@@ -52,11 +83,16 @@ func (s *WebSocketServer) wsConnect(w http.ResponseWriter, r *http.Request) (*we
 }
 
 func (s *WebSocketServer) RealTime(w http.ResponseWriter, r *http.Request) {
+	if err := s.auth.Authenticate(r); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 
 	var err error
 	conn, err := s.wsConnect(w, r)
 	if err != nil {
-		panic(err)
+		log.Printf("websocket upgrade failed: %v", err)
+		return
 	}
 
 	defer func() {
@@ -65,18 +101,12 @@ func (s *WebSocketServer) RealTime(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	ctx := r.Context()
-	connWrapper, err := s.NewConnWrapper(ctx, conn, r)
+	connWrapper, err := local.NewConnWrapper(ctx, conn, local.ClientInfoFromRequest(r))
 	if err != nil {
-		panic(err)
+		log.Printf("connection initialization failed: %v", err)
+		_ = conn.Close()
+		return
 	}
 
 	_ = connWrapper.ReadLoop(ctx)
-}
-
-func (s *WebSocketServer) NewConnWrapper(
-	ctx context.Context, conn *websocket.Conn, r *http.Request) (base.WsConnWrapper, error) {
-	if config.Provider().Name == "openai" {
-		return openai.NewConnWrapper(ctx, conn)
-	}
-	return xiaozhi.NewConnWrapper(ctx, conn, xiaozhi.WithOriginReq(r))
 }

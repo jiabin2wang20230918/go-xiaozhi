@@ -7,7 +7,6 @@ import (
 type ServerEventType string
 
 const (
-	ServerEventTypeError ServerEventType = "error"
 	ServerEventTypeHello ServerEventType = "hello"
 	ServerEventTypeSTT   ServerEventType = "stt"
 	ServerEventTypeLLM   ServerEventType = "llm"
@@ -33,17 +32,9 @@ type ServerEventBase struct {
 	SessionId string          `json:"session_id"`
 }
 
-type ServerEventError struct {
-	ServerEventBase
-	Error string `json:"error"`
-}
-
-func (e *ServerEventError) GetType() ServerEventType {
-	return ServerEventTypeError
-}
-
 type ServerEventHello struct {
 	ServerEventBase
+	Version     int         `json:"version"`
 	Transport   string      `json:"transport"`
 	AudioParams AudioParams `json:"audio_params"`
 }
@@ -79,22 +70,36 @@ func (e *ServerEventLLM) GetType() ServerEventType {
 
 type ServerEventTTS struct {
 	ServerEventBase
-	State      ServerTTSState `json:"state"`
-	Text       string         `json:"text"`
-	SampleRate int            `json:"sample_rate"`
+	State ServerTTSState `json:"state"`
+	Text  string         `json:"text,omitempty"`
 }
 
 func (e *ServerEventTTS) GetType() ServerEventType {
 	return ServerEventTypeTTS
 }
 
-// {'type': 'tts', 'state': 'start', 'sample_rate': 24000, 'session_id': '9842a257'}
+// {'type': 'tts', 'state': 'start', 'session_id': '9842a257'}
 // {'type': 'tts', 'state': 'stop', 'session_id': '9842a257'}
 // {'type': 'tts', 'state': 'sentence_start', 'text': '有什么好玩的事吗？', 'session_id': '9842a257'}
 // {'type': 'tts', 'state': 'sentence_end', 'text': '有什么好玩的事吗？', 'session_id': '9842a257'}
 
 type ServerEventInterface interface {
 	ServerEventHello | ServerEventSTT | ServerEventLLM | ServerEventTTS
+}
+
+type ServerEventIotCommand struct {
+	Name       string         `json:"name"`
+	Method     string         `json:"method"`
+	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+type ServerEventIot struct {
+	Type     ServerEventType         `json:"type"`
+	Commands []ServerEventIotCommand `json:"commands,omitempty"`
+}
+
+func (e *ServerEventIot) GetType() ServerEventType {
+	return ServerEventTypeIot
 }
 
 func unmarshalServerEvent[T ServerEventInterface](data []byte) (*T, error) {
@@ -112,8 +117,6 @@ func IsServerEvent(event any) (ServerEvent, bool) {
 		return nil, false
 	}
 	switch ev.GetType() {
-	case ServerEventTypeError:
-		return event.(*ServerEventError), true
 	case ServerEventTypeHello:
 		return event.(*ServerEventHello), true
 	case ServerEventTypeSTT:
@@ -122,6 +125,8 @@ func IsServerEvent(event any) (ServerEvent, bool) {
 		return event.(*ServerEventLLM), true
 	case ServerEventTypeTTS:
 		return event.(*ServerEventTTS), true
+	case ServerEventTypeIot:
+		return event.(*ServerEventIot), true
 	default:
 		return nil, false
 	}

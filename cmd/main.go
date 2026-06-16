@@ -8,8 +8,12 @@ import (
 )
 
 func main() {
+	if err := runPreflightChecks(); err != nil {
+		log.Fatal(err)
+	}
+
 	server := handler.NewWebSocketServer()
-	if err := server.Start(":80"); err != nil {
+	if err := server.Start(""); err != nil {
 		log.Fatal("Error starting server:", err)
 	}
 }

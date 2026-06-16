@@ -1,19 +1,22 @@
 package xiaozhi
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
+	"io"
 )
 
 // ClientEventType 客户端事件
 type ClientEventType string
 
 const (
+	ClientEventTypeRawText      ClientEventType = "raw_text"
 	ClientEventTypeHello        ClientEventType = "hello"
 	ClientEventTypeListen       ClientEventType = "listen"
 	ClientEventTypeAppendBuffer ClientEventType = "append.buffer"
 	ClientEventTypeAbort        ClientEventType = "abort"
 	ClientEventTypeIot          ClientEventType = "iot"
+	ClientEventTypeUnknown      ClientEventType = "unknown"
 )
 
 // ClientState 客户端监听状态
@@ -39,6 +42,15 @@ type ClientEvent interface {
 	ClientEventType() ClientEventType
 	GetAudioParams() *AudioParams
 	GetSessionID() string
+}
+
+type ClientEventRawText struct {
+	Text string
+}
+
+type ClientEventUnknown struct {
+	Type ClientEventType
+	Raw  []byte
 }
 
 type AudioParams struct {
@@ -69,6 +81,7 @@ type ClientEventListen struct {
 	ClientEventBase
 	State ClientState `json:"state"`
 	Mode  ClientMode  `json:"mode"`
+	Text  string      `json:"text,omitempty"`
 }
 
 type ClientEventAppendBuffer struct {
@@ -88,7 +101,115 @@ type ClientEventAbort struct {
 
 type ClientEventIot struct {
 	ClientEventBase
-	Data string `json:"data"`
+	Descriptors []IotDescriptor `json:"descriptors,omitempty"`
+	States      []IotState      `json:"states,omitempty"`
+	Data        string          `json:"data,omitempty"`
+	Raw         map[string]any  `json:"-"`
+}
+
+type IotDescriptor struct {
+	Name        string                       `json:"name"`
+	Description string                       `json:"description"`
+	Properties  map[string]IotPropertySchema `json:"properties"`
+	Methods     map[string]IotMethodSchema   `json:"methods"`
+}
+
+func (d *IotDescriptor) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Properties  json.RawMessage `json:"properties"`
+		Methods     json.RawMessage `json:"methods"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	properties, err := unmarshalIotProperties(raw.Properties)
+	if err != nil {
+		return err
+	}
+	methods, err := unmarshalIotMethods(raw.Methods)
+	if err != nil {
+		return err
+	}
+	d.Name = raw.Name
+	d.Description = raw.Description
+	d.Properties = properties
+	d.Methods = methods
+	return nil
+}
+
+type IotPropertySchema struct {
+	Name        string `json:"name,omitempty"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+type IotMethodSchema struct {
+	Name        string                       `json:"name,omitempty"`
+	Description string                       `json:"description"`
+	Parameters  map[string]IotPropertySchema `json:"parameters"`
+}
+
+func unmarshalIotProperties(data json.RawMessage) (map[string]IotPropertySchema, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
+	var byName map[string]IotPropertySchema
+	if err := json.Unmarshal(data, &byName); err == nil {
+		for name, schema := range byName {
+			if schema.Name == "" {
+				schema.Name = name
+				byName[name] = schema
+			}
+		}
+		return byName, nil
+	}
+	var list []IotPropertySchema
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	byName = make(map[string]IotPropertySchema, len(list))
+	for _, schema := range list {
+		if schema.Name == "" {
+			continue
+		}
+		byName[schema.Name] = schema
+	}
+	return byName, nil
+}
+
+func unmarshalIotMethods(data json.RawMessage) (map[string]IotMethodSchema, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
+	var byName map[string]IotMethodSchema
+	if err := json.Unmarshal(data, &byName); err == nil {
+		for name, schema := range byName {
+			if schema.Name == "" {
+				schema.Name = name
+				byName[name] = schema
+			}
+		}
+		return byName, nil
+	}
+	var list []IotMethodSchema
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	byName = make(map[string]IotMethodSchema, len(list))
+	for _, schema := range list {
+		if schema.Name == "" {
+			continue
+		}
+		byName[schema.Name] = schema
+	}
+	return byName, nil
+}
+
+type IotState struct {
+	Name  string         `json:"name"`
+	State map[string]any `json:"state"`
 }
 
 func (e *ClientEventBase) ClientEventType() ClientEventType {
@@ -100,6 +221,30 @@ func (e *ClientEventBase) GetAudioParams() *AudioParams {
 
 func (e *ClientEventBase) GetSessionID() string {
 	return e.SessionID
+}
+
+func (e *ClientEventRawText) ClientEventType() ClientEventType {
+	return ClientEventTypeRawText
+}
+
+func (e *ClientEventRawText) GetAudioParams() *AudioParams {
+	return nil
+}
+
+func (e *ClientEventRawText) GetSessionID() string {
+	return ""
+}
+
+func (e *ClientEventUnknown) ClientEventType() ClientEventType {
+	return ClientEventTypeUnknown
+}
+
+func (e *ClientEventUnknown) GetAudioParams() *AudioParams {
+	return nil
+}
+
+func (e *ClientEventUnknown) GetSessionID() string {
+	return ""
 }
 
 func (e *ClientEventHello) ClientEventType() ClientEventType {
@@ -177,12 +322,23 @@ func MarshalClientEvent(event ClientEvent) ([]byte, error) {
 
 // UnmarshalClientEvent Unmarshal the server event from the given JSON data.
 func UnmarshalClientEvent(data []byte) (ClientEvent, error) {
+	if isJSONInteger(data) {
+		return &ClientEventRawText{Text: string(data)}, nil
+	}
+	if !isJSONObject(data) {
+		if json.Valid(bytes.TrimSpace(data)) {
+			return &ClientEventUnknown{
+				Raw: append([]byte(nil), data...),
+			}, nil
+		}
+		return &ClientEventRawText{Text: string(data)}, nil
+	}
 	var eventType struct {
 		Type ClientEventType `json:"type"`
 	}
 	err := json.Unmarshal(data, &eventType)
 	if err != nil {
-		return nil, err
+		return &ClientEventRawText{Text: string(data)}, nil
 	}
 	switch eventType.Type {
 	case ClientEventTypeHello:
@@ -192,10 +348,37 @@ func UnmarshalClientEvent(data []byte) (ClientEvent, error) {
 	case ClientEventTypeAbort:
 		return unmarshalClientEvent[ClientEventAbort](data)
 	case ClientEventTypeIot:
-		return unmarshalClientEvent[ClientEventIot](data)
+		ev, err := unmarshalClientEvent[ClientEventIot](data)
+		if err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(data, &ev.Raw)
+		return ev, nil
 	default:
-		return nil, fmt.Errorf("unknown client event type: %s", eventType.Type)
+		return &ClientEventUnknown{
+			Type: eventType.Type,
+			Raw:  append([]byte(nil), data...),
+		}, nil
 	}
+}
+
+func isJSONInteger(data []byte) bool {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return false
+	}
+	var n int64
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&n); err != nil {
+		return false
+	}
+	_, err := decoder.Token()
+	return err == io.EOF
+}
+
+func isJSONObject(data []byte) bool {
+	data = bytes.TrimSpace(data)
+	return len(data) > 0 && data[0] == '{'
 }
 
 func UnmarshalClientBinEvent(data []byte) (ClientEvent, error) {

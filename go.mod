@@ -7,10 +7,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mitchellh/mapstructure v1.5.0
-	github.com/samber/lo v1.50.0
 	github.com/spf13/viper v1.20.1
-	golang.org/x/sync v0.13.0
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -37,5 +36,4 @@ require (
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
