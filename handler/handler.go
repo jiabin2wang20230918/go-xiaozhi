@@ -44,6 +44,9 @@ func (s *WebSocketServer) Start(addr string) error {
 	if addr == "" {
 		addr = fmt.Sprintf("%s:%d", config.Server().IP, config.Server().Port)
 	}
+	conf := config.Get()
+	log.Printf("Config loaded from: %s", config.GetConfigFilePath())
+	log.Printf("Providers: asr=%s llm=%s tts=%s vad=%s intent=%s", conf.ASR.Type, conf.LLM.Type, conf.TTS.Type, conf.Session.VAD.Type, conf.Intent.Mode)
 	log.Printf("Server started at local: %s\n", websocketURL("127.0.0.1", addr))
 	ip, _ := utils.GetLocalIP()
 	log.Printf("Server started at public: %s\n", websocketURL(ip, addr))
@@ -84,6 +87,7 @@ func (s *WebSocketServer) wsConnect(w http.ResponseWriter, r *http.Request) (*we
 
 func (s *WebSocketServer) RealTime(w http.ResponseWriter, r *http.Request) {
 	if err := s.auth.Authenticate(r); err != nil {
+		log.Printf("authentication failed remote=%s device-id=%s error=%v", r.RemoteAddr, r.Header.Get("Device-Id"), err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -94,6 +98,7 @@ func (s *WebSocketServer) RealTime(w http.ResponseWriter, r *http.Request) {
 		log.Printf("websocket upgrade failed: %v", err)
 		return
 	}
+	log.Printf("websocket connected remote=%s device-id=%s client-id=%s", r.RemoteAddr, r.Header.Get("Device-Id"), r.Header.Get("Client-Id"))
 
 	defer func() {
 		_ = conn.Close()

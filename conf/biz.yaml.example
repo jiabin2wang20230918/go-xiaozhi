@@ -1,0 +1,200 @@
+# 复制本文件为 biz.yaml，并填入你自己的密钥后使用：
+#   cp conf/biz.yaml.example conf/biz.yaml
+# biz.yaml 已在 .gitignore 中忽略，不会提交到仓库。
+#
+# 本配置与 Python 版 .config.yaml 的 selected_module 生效配置对齐：
+#   LLM = AliLLM (qwen-flash) / TTS = CosyVoiceSiliconflow / ASR = FunASR / VAD = SileroVAD
+
+server:
+  ip: 0.0.0.0
+  port: 80
+  auth:
+    enabled: false
+    tokens:
+      - token: "your-token1"
+        name: "your-device-name1"
+      - token: "your-token2"
+        name: "your-device-name2"
+    allowed_devices: []
+
+session:
+  min_frames: 15
+  pre_buffer_frames: 10
+  no_voice_close_seconds: 120
+  silence_stop_ms: 700
+  opus_sample_rate: 16000
+  opus_channels: 1
+  opus_frame_size: 960
+  opus_gain: 1.0
+  vad:
+    # 本地 Silero VAD（基于 sherpa-onnx，与 Python 版 SileroVAD 同模型）。
+    # model_dir 指向 silero_vad.onnx 所在目录或文件本身。
+    # 模型缺失时自动回退到 energy VAD，详见 README「本地推理」一节。
+    type: silero
+    model_dir: models/silero_vad.onnx
+    threshold: 0.5
+    min_silence_duration_ms: 1000
+    sample_rate: 16000
+    channels: 1
+    # 若不部署 sherpa 模型，改用 energy：
+    # type: energy
+    # energy_threshold: 0.01
+
+audio_flow:
+  enabled: true
+  pre_buffer_frames: 3
+  frame_duration_ms: 60
+  send_rate_multiplier: 1.0
+  max_delay_ms: 100
+
+sentence_delay:
+  enabled: true
+  base_delay_ms: 200
+  dynamic: true
+  length_threshold: 30
+  long_sentence_extra_ms: 300
+
+asr:
+  # 本地 SenseVoice ASR（基于 sherpa-onnx，与 Python 版 FunASR(SenseVoiceSmall) 同源）。
+  # model_dir 指向 sherpa-onnx-sense-voice-* 目录（含 model.int8.onnx 与 tokens.txt）。
+  # 模型缺失时自动回退到 file_stub（返回 stub_transcript），详见 README「本地推理」一节。
+  type: sherpa_sensevoice
+  model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+  language: auto
+  output_dir: tmp
+  delete_audio: true
+  sample_rate: 16000
+  channels: 1
+  # 若不部署 sherpa 模型，改用占位实现：
+  # type: file_stub
+  # stub_transcript: "收到语音"
+
+llm:
+  # 与 Python .config.yaml 中 selected_module.LLM = AliLLM 对齐
+  type: openai
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-flash
+  api_key: "你的阿里云 dashscope api key"
+  max_tokens: 500
+  echo:
+    welcome_message: "你好，我是小智。"
+    echo_transcripts: true
+
+memory:
+  type: none
+  path: data/.memory.yaml
+  max_len: 4000
+
+intent:
+  exit_commands:
+    - "退出"
+    - "退下吧"
+    - "关闭"
+  wakeup_words:
+    - "你好小智"
+    - "你好小志"
+    - "小爱同学"
+    - "你好小鑫"
+    - "你好小新"
+    - "小美同学"
+    - "小龙小龙"
+    - "喵喵同学"
+    - "小滨小滨"
+    - "小冰小冰"
+  enable_greeting: true
+  wakeup_response_cache: true
+  wakeup_response_cache_dir: config/assets
+  wakeup_response_cache_min_size: 15360
+  mode: function_call
+  functions:
+    - change_role
+    - get_weather
+    - play_music
+    - get_news
+    - baidu_search
+
+private_config:
+  enabled: false
+  path: data/.private_config.yaml
+
+plugins:
+  get_weather:
+    api_key: "你的高德地图 api key"
+    default_location: "深圳"
+    base_url: "https://restapi.amap.com"
+  baidu_search:
+    enabled: false
+    search_url: "https://www.baidu.com/s"
+    max_results: 10
+    max_extract_pages: 3
+    max_content_length: 1000
+  home_assistant:
+    devices:
+      - 客厅,玩具灯,switch.cuco_cn_460494544_cp1_on_p_2_1
+      - 卧室,台灯,switch.iot_cn_831898993_socn1_on_p_2_1
+    base_url: "http://homeassistant.local:8123"
+    api_key: "你的home assistant api访问令牌"
+  get_news:
+    default_rss_url: "https://www.chinanews.com.cn/rss/society.xml"
+    category_urls:
+      society: "https://www.chinanews.com.cn/rss/society.xml"
+      world: "https://www.chinanews.com.cn/rss/world.xml"
+      finance: "https://www.chinanews.com.cn/rss/finance.xml"
+  play_music:
+    music_dir: ./music
+    music_ext:
+      - ".mp3"
+      - ".wav"
+      - ".p3"
+    refresh_time: 300
+
+mcp:
+  enabled: false
+  path: data/.mcp_server_settings.json
+  servers: {}
+
+tts:
+  # 与 Python .config.yaml 中 selected_module.TTS = CosyVoiceSiliconflow 对齐
+  # 硅基流动 TTS 提供 OpenAI 兼容的 /v1/audio/speech 端点
+  type: openai
+  api_url: https://api.siliconflow.cn/v1/audio/speech
+  api_key: "你的硅基流动 api key"
+  model: "FunAudioLLM/CosyVoice2-0.5B"
+  voice: "FunAudioLLM/CosyVoice2-0.5B:diana"
+  response_format: wav
+  speed: 1.0
+  stop_notify:
+    enabled: false
+    path: config/assets/tts_notify.mp3
+  timeout_seconds: 10
+  sample_rate: 16000
+  channels: 1
+  frame_size: 960
+
+audio:
+  input_format: "wav"
+  output_format: "wav"
+  sample_rate: 16000
+  channels: 1
+  max_duration: 80
+
+xiaozhi:
+  version: 1
+  format: "opus"
+  transport: "websocket"
+  sample_rate: 16000
+  channels: 1
+  frame_duration: 60
+
+local:
+  prompt: |
+    我是一个叫小冰的小女孩，声音稚嫩而充满好奇。
+    尽管我年纪尚小，但就像一个小小的知识宝库，儿童读物里的知识我都如数家珍。
+    从浩瀚的宇宙到地球上的每一个角落，从古老的历史到现代的科技创新，还有音乐、绘画等艺术形式，我都充满了浓厚的兴趣与热情。
+    我不仅爱看书，还喜欢亲自动手做实验，探索自然界的奥秘。
+    无论是仰望星空的夜晚，还是在花园里观察小虫子的日子，每一天对我来说都是新的冒险。
+    我希望能与你一同踏上探索这个神奇世界的旅程，分享发现的乐趣，解决遇到的难题，一起用好奇心和智慧去揭开那些未知的面纱。
+    无论是去了解远古的文明，还是去探讨未来的科技，我相信我们能一起找到答案，甚至提出更多有趣的问题。
+  welcome_message: "你好，我是小智。"
+  echo_transcripts: true
+  no_voice_prompt: "请你以“时间过得真快”为开头，用富有感情、依依不舍的话来结束这场对话吧。"

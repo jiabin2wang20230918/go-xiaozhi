@@ -1,0 +1,30 @@
+# 真实配置（含密钥，请勿提交；复制 biz.yaml.example 后填入你的密钥）
+conf/biz.yaml
+conf/*.local.yaml
+
+# Go 构建产物
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go-xiaozhi
+main
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# 运行时目录
+/tmp/
+tmp/
+data/
+
+# 本地推理模型（sherpa-onnx 等，体积大且常为软链接，不入库）
+models/

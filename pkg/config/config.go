@@ -95,15 +95,18 @@ type SentenceDelayConf struct {
 }
 
 type VADConf struct {
-	Type            string            `yaml:"type"`
-	EnergyThreshold float64           `yaml:"energy_threshold"`
-	Threshold       float64           `yaml:"threshold"`
-	Command         string            `yaml:"command"`
-	Args            []string          `yaml:"args"`
-	Env             map[string]string `yaml:"env"`
-	OutputDir       string            `yaml:"output_dir"`
-	SampleRate      int               `yaml:"sample_rate"`
-	Channels        int               `yaml:"channels"`
+	Type                 string            `yaml:"type"`
+	EnergyThreshold      float64           `yaml:"energy_threshold"`
+	Threshold            float64           `yaml:"threshold"`
+	Command              string            `yaml:"command"`
+	Args                 []string          `yaml:"args"`
+	Env                  map[string]string `yaml:"env"`
+	OutputDir            string            `yaml:"output_dir"`
+	SampleRate           int               `yaml:"sample_rate"`
+	Channels             int               `yaml:"channels"`
+	ModelDir             string            `yaml:"model_dir"`
+	MinSilenceDurationMs int               `yaml:"min_silence_duration_ms"`
+	MaxSpeechDurationS   float64           `yaml:"max_speech_duration_s"`
 }
 
 type ASRConf struct {
@@ -122,6 +125,7 @@ type ASRConf struct {
 	StubTranscript string            `yaml:"stub_transcript"`
 	SampleRate     int               `yaml:"sample_rate"`
 	Channels       int               `yaml:"channels"`
+	ModelDir       string            `yaml:"model_dir"`
 }
 
 type TTSConf struct {
@@ -968,12 +972,11 @@ func inferLegacyVADType(name string, conf *VADConf) bool {
 		return true
 	}
 	lowerName := strings.ToLower(name)
-	if strings.Contains(lowerName, "silero") && !strings.Contains(lowerName, "command") {
-		return false
-	}
 	switch {
 	case strings.TrimSpace(conf.Command) != "" || strings.Contains(lowerName, "command"):
 		conf.Type = "command"
+	case strings.Contains(lowerName, "silero") && strings.TrimSpace(conf.ModelDir) != "":
+		conf.Type = "silero"
 	case strings.Contains(lowerName, "non_empty"):
 		conf.Type = "non_empty"
 	case strings.Contains(lowerName, "energy") || conf.EnergyThreshold > 0:
@@ -1023,6 +1026,8 @@ func isSupportedASR(conf ASRConf) bool {
 		return strings.TrimSpace(conf.Model) != ""
 	case "command":
 		return strings.TrimSpace(conf.Command) != ""
+	case "sherpa_sensevoice":
+		return strings.TrimSpace(conf.ModelDir) != ""
 	default:
 		return false
 	}
@@ -1049,6 +1054,8 @@ func isSupportedVAD(conf VADConf) bool {
 		return true
 	case "command":
 		return strings.TrimSpace(conf.Command) != ""
+	case "silero":
+		return strings.TrimSpace(conf.ModelDir) != ""
 	default:
 		return false
 	}
@@ -1216,6 +1223,11 @@ func validateASR(conf ASRConf) error {
 			return fmt.Errorf("asr.command is required when asr.type=command")
 		}
 		return nil
+	case "sherpa_sensevoice":
+		if strings.TrimSpace(conf.ModelDir) == "" {
+			return fmt.Errorf("asr.model_dir is required when asr.type=sherpa_sensevoice")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported asr.type: %s", conf.Type)
 	}
@@ -1285,6 +1297,11 @@ func validateVAD(conf VADConf) error {
 	case "command":
 		if strings.TrimSpace(conf.Command) == "" {
 			return fmt.Errorf("session.vad.command is required when session.vad.type=command")
+		}
+		return nil
+	case "silero":
+		if strings.TrimSpace(conf.ModelDir) == "" {
+			return fmt.Errorf("session.vad.model_dir is required when session.vad.type=silero")
 		}
 		return nil
 	default:

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -144,6 +145,7 @@ func NewHandlerWithMemory(ctx context.Context, client ClientInfo, mem memory.Sto
 	}
 	h.appendHomeAssistantDevicesToPrompt()
 	_ = h.mcpManager.Initialize(ctx)
+	log.Printf("session started session_id=%s remote_ip=%s device_id=%s asr=%s llm=%s tts=%s vad=%s", h.sessionID, h.client.RemoteIP, h.client.DeviceID, runtime.ASR.Type, runtime.LLM.Type, runtime.TTS.Type, runtime.Session.VAD.Type)
 	_ = h.write(h.helloEvent())
 	return h, nil
 }
@@ -193,6 +195,9 @@ func (h *Handler) DispatchClientEvent(ctx context.Context, event any) (error, bo
 	if !ok {
 		return errors.New("invalid xiaozhi client event"), false
 	}
+	if ev.ClientEventType() != xiaozhiapi.ClientEventTypeAppendBuffer {
+		log.Printf("client event session_id=%s type=%s", h.sessionID, ev.ClientEventType())
+	}
 
 	switch e := ev.(type) {
 	case *xiaozhiapi.ClientEventRawText:
@@ -225,6 +230,7 @@ func (h *Handler) handleHello(ctx context.Context, event *xiaozhiapi.ClientEvent
 }
 
 func (h *Handler) handleListen(ctx context.Context, event *xiaozhiapi.ClientEventListen) error {
+	log.Printf("listen event session_id=%s state=%s mode=%s text=%q", h.sessionID, event.State, event.Mode, event.Text)
 	h.mu.Lock()
 	if event.Mode != "" {
 		h.listenMode = event.Mode
@@ -315,6 +321,7 @@ func (h *Handler) handleAbort(ctx context.Context, event *xiaozhiapi.ClientEvent
 }
 
 func (h *Handler) handleIot(ctx context.Context, event *xiaozhiapi.ClientEventIot) error {
+	log.Printf("iot event session_id=%s descriptors=%d states=%d", h.sessionID, len(event.Descriptors), len(event.States))
 	if h.useFunctionCallMode() {
 		h.iotRegistry.AddDescriptors(event.Descriptors)
 	}
@@ -922,9 +929,11 @@ func (h *Handler) processUtterance(ctx context.Context, frames []voice.AudioFram
 
 	transcript, err := h.pipeline.Transcribe(ctx, h.sessionID, frames)
 	if err != nil {
+		log.Printf("asr failed session_id=%s frames=%d error=%v", h.sessionID, len(frames), err)
 		h.resumeAudioReception()
 		return err
 	}
+	log.Printf("asr transcript session_id=%s text=%q", h.sessionID, transcript)
 	if transcript == "" || removePunctuationLikePython(transcript) == "" {
 		h.resumeAudioReception()
 		return nil
@@ -955,6 +964,7 @@ func (h *Handler) processText(ctx context.Context, transcript string) error {
 	if transcript == "" {
 		return nil
 	}
+	log.Printf("process text session_id=%s text=%q", h.sessionID, transcript)
 	speechSeq := h.speechSeq.Load()
 
 	h.mu.Lock()
@@ -992,11 +1002,13 @@ func (h *Handler) processText(ctx context.Context, transcript string) error {
 		response, err = h.pipeline.Respond(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript)
 	}
 	if err != nil {
+		log.Printf("llm/tts pipeline failed session_id=%s error=%v", h.sessionID, err)
 		return err
 	}
 	if response.Transcript == "" {
 		return nil
 	}
+	log.Printf("assistant response session_id=%s segments=%d text=%q", h.sessionID, len(response.Segments), assistantHistoryContent(response))
 
 	if len(response.Segments) > 0 {
 		if err := h.sendSpeechResponse(response.Segments, speechSeq); err != nil {

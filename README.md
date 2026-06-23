@@ -33,7 +33,7 @@ The bind address is configured with:
 ```yaml
 server:
   ip: 0.0.0.0
-  port: 8000
+  port: 80
 ```
 
 ## Providers
@@ -85,6 +85,45 @@ tts:
 OpenAI-compatible ASR uploads a generated WAV file. OpenAI-compatible TTS expects a PCM WAV response and converts it to Opus frames for the device.
 
 Legacy Python `selected_module` LLM entries with `type: ollama` or `type: xinference` are normalized to the same OpenAI-compatible client by appending `/v1` to `base_url` when needed.
+
+### Local Inference (sherpa-onnx)
+
+VAD and ASR can run fully offline via [sherpa-onnx-go](https://github.com/k2-fsa/sherpa-onnx-go) (CGO + prebuilt shared libs). This mirrors the Python `SileroVAD` / `FunASR(SenseVoice)` providers. If a model file is missing, the factory logs a warning and falls back to `energy` VAD / `file_stub` ASR respectively, so the server always starts.
+
+**VAD (Silero)** — drop `silero_vad.onnx` under `models/` (a symlink is fine):
+
+```yaml
+session:
+  vad:
+    type: silero
+    model_dir: models/silero_vad.onnx   # directory or .onnx file
+    threshold: 0.5
+    min_silence_duration_ms: 1000
+```
+
+Model source: <https://github.com/k2-fsa/sherpa-onnx/releases> (`vad-models/silero_vad.onnx`, ~2.3 MB), or reuse the one already shipped with the Python project at `xiaozhi-esp32-server/main/xiaozhi-server/models/snakers4_silero-vad/src/silero_vad/data/silero_vad.onnx`:
+
+```bash
+mkdir -p models
+ln -sf ../xiaozhi-esp32-server/main/xiaozhi-server/models/snakers4_silero-vad/src/silero_vad/data/silero_vad.onnx models/silero_vad.onnx
+```
+
+**ASR (SenseVoice)** — download `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` into `models/` (from <https://github.com/k2-fsa/sherpa-onnx/releases>, `asr-models`), then:
+
+```yaml
+asr:
+  type: sherpa_sensevoice
+  model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+  language: auto          # zh / en / ja / ko / yue / auto
+  sample_rate: 16000
+  channels: 1
+```
+
+Notes:
+
+- sherpa-onnx consumes **16 kHz mono float32** PCM; the adapters resample and normalize internally.
+- `models/` is git-ignored. CGO must be enabled (`CGO_ENABLED=1`, default on Linux/macOS with a C toolchain).
+
 
 Python provider bridges can be configured through local commands. These keep the device-facing Xiaozhi protocol unchanged while letting an existing Python wrapper run FunASR, EdgeTTS, SileroVAD, or similar local engines.
 

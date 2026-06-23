@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -86,6 +87,19 @@ func NewASR(conf config.ASRConf) ASR {
 			SampleRate:  conf.SampleRate,
 			Channels:    conf.Channels,
 		}
+	case "sherpa_sensevoice":
+		asr, err := NewSherpaASR(conf)
+		if err != nil {
+			log.Printf("sherpa sense voice asr unavailable (%v); falling back to file_stub asr", err)
+			return &FileASR{
+				OutputDir:   conf.OutputDir,
+				Transcript:  conf.StubTranscript,
+				DeleteAudio: conf.DeleteAudio,
+				SampleRate:  conf.SampleRate,
+				Channels:    conf.Channels,
+			}
+		}
+		return asr
 	default:
 		return &FileASR{
 			OutputDir:   conf.OutputDir,

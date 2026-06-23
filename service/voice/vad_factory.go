@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"log"
 
 	"github.com/xdimtech/go-xiaozhi/pkg/config"
 )
@@ -22,6 +23,13 @@ func NewVAD(conf config.VADConf) VAD {
 			SampleRate: conf.SampleRate,
 			Channels:   conf.Channels,
 		}
+	case "silero":
+		vad, err := NewSherpaVAD(conf)
+		if err != nil {
+			log.Printf("sherpa silero vad unavailable (%v); falling back to energy vad", err)
+			return EnergyVAD{Threshold: vadThreshold(conf)}
+		}
+		return vad
 	default:
 		return EnergyVAD{Threshold: vadThreshold(conf)}
 	}
