@@ -2252,6 +2252,15 @@ func TestListenStopRunsVoicePipeline(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
 	<-h.Recv(context.Background())
+	// 注入确定性 pipeline：ASR 回 "收到语音"，EchoLLM(echo) 回 "我听到了：收到语音"
+	// 切成两段（"我听到了：" / "收到语音"），captureSegmentTTS 把每段文本转为非空音频帧。
+	// 不依赖默认配置（默认 pipeline 可能连真实 OpenAI，导致输出不确定）。
+	h.pipeline = voice.NewPipeline(
+		fakeASR{text: "收到语音"},
+		voice.EchoLLM{EchoTranscripts: true},
+		captureSegmentTTS{},
+	)
+	h.sleep = func(time.Duration) {}
 
 	err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventListen{
 		State: xiaozhiapi.ClientStateListenStart,
