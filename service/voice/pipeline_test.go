@@ -541,3 +541,69 @@ func (blockingTTS) Synthesize(ctx context.Context, sessionID string, text string
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
+
+// countingTTS 记录每次合成的文本，用于断言"流式回调出错后是否还合成了后续段"。
+type countingTTS struct {
+	texts []string
+}
+
+func (t *countingTTS) Synthesize(ctx context.Context, sessionID string, text string) ([][]byte, error) {
+	t.texts = append(t.texts, text)
+	return [][]byte{[]byte(text)}, nil
+}
+
+// WithSegmentSink 设了回调后，合成出每段应按序经回调流出，且 Segments 仍完整。
+func TestPipelineStreamsSegmentsViaCallback(t *testing.T) {
+	p := NewPipeline(
+		fixedASR{text: "用户语音"},
+		streamLLM{chunks: []string{"第一", "句。第二句", "！尾巴"}},
+		captureTTS{},
+	)
+	var seen []string
+	sp := p.WithSegmentSink(func(seg SpeechSegment) error {
+		seen = append(seen, seg.Text)
+		return nil
+	})
+	resp, err := sp.Respond(context.Background(), "s1", "", nil, "用户语音")
+	if err != nil {
+		t.Fatalf("respond: %v", err)
+	}
+	want := []string{"第一句", "第二句", "尾巴"}
+	if len(seen) != len(want) {
+		t.Fatalf("callback saw %d segments, want %d: %v", len(seen), len(want), seen)
+	}
+	for i, w := range want {
+		if seen[i] != w {
+			t.Fatalf("callback segment[%d] = %q, want %q", i, seen[i], w)
+		}
+	}
+	// 回调流式不影响 Response.Segments / Assistant（历史仍完整）。
+	if len(resp.Segments) != len(want) {
+		t.Fatalf("response segments = %d, want %d", len(resp.Segments), len(want))
+	}
+	if resp.Assistant != "第一句。第二句！尾巴" {
+		t.Fatalf("assistant = %q", resp.Assistant)
+	}
+}
+
+// 回调返回错误应中止 pipeline：后续段不再合成。
+func TestPipelineCallbackErrorAborts(t *testing.T) {
+	tts := &countingTTS{}
+	p := NewPipeline(
+		fixedASR{text: "用户语音"},
+		streamLLM{chunks: []string{"第一句。", "第二句。", "第三句。"}},
+		tts,
+	)
+	sentinel := errors.New("stop")
+	sp := p.WithSegmentSink(func(seg SpeechSegment) error {
+		return sentinel // 第一段后即返回错误
+	})
+	_, err := sp.Respond(context.Background(), "s1", "", nil, "用户语音")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error, got %v", err)
+	}
+	// 仅合成第一段（回调在第一段后中止，后续不再合成）。
+	if len(tts.texts) != 1 || tts.texts[0] != "第一句" {
+		t.Fatalf("expected only first segment synthesized, got %v", tts.texts)
+	}
+}

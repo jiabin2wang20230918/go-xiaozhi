@@ -104,6 +104,20 @@ type Pipeline struct {
 	tts        TTS
 	ttsTimeout time.Duration
 	memory     Memory
+	splitMaxRunes int // 兜底切句长度（rune）；<=0 用默认值。流式合成时影响首句何时触达。
+	// onSegment 在每段合成完成、追加到 Response.Segments 之前同步调用。
+	// 非 nil 时实现"流式发送"——合成出一句即推送给调用方（如 handler 立即下发设备），
+	// 不必等整段回复合成完毕。返回非 nil error（如取消 sentinel）会中止 pipeline。
+	// nil = 批量模式（合成完全部攒进 Segments 后再返回，旧行为）。
+	onSegment func(SpeechSegment) error
+}
+
+// WithSegmentSink 返回一个绑定了分段 sink 的新 *Pipeline（复制现有字段，不改接收者）。
+// 调用方用返回值调 Respond*，原 pipeline 不受影响——避免在共享字段上反复装/卸 sink。
+func (p *Pipeline) WithSegmentSink(fn func(SpeechSegment) error) *Pipeline {
+	cp := *p
+	cp.onSegment = fn
+	return &cp
 }
 
 func NewPipeline(asr ASR, llm LLM, tts TTS) *Pipeline {
@@ -128,7 +142,16 @@ func NewPipelineFromConfig(asr config.ASRConf, llm config.LLMConf, tts config.TT
 	if tts.TimeoutSeconds > 0 {
 		p.ttsTimeout = time.Duration(tts.TimeoutSeconds) * time.Second
 	}
+	p.splitMaxRunes = tts.SplitMaxChars
 	return p
+}
+
+// newSplitter 构造本 pipeline 配置下的分句器（标点优先 + 长度兜底）。
+func (p *Pipeline) newSplitter() *SentenceSplitter {
+	if p.splitMaxRunes > 0 {
+		return NewSentenceSplitterWithMax(p.splitMaxRunes)
+	}
+	return NewSentenceSplitter()
 }
 
 func (p *Pipeline) Process(ctx context.Context, req Utterance) (Response, error) {
@@ -167,24 +190,20 @@ func (p *Pipeline) Respond(ctx context.Context, sessionID string, prompt string,
 		Transcript: transcript,
 		Emotion:    "happy",
 	}
-	splitter := NewSentenceSplitter()
+	splitter := p.newSplitter()
 	var assistant strings.Builder
 	for chunk := range stream {
 		assistant.WriteString(chunk)
 		for _, text := range splitter.Push(chunk) {
-			segment, err := p.synthesizeSegment(ctx, sessionID, text)
-			if err != nil {
+			if err := p.emitSegment(ctx, sessionID, text, &response); err != nil {
 				return Response{}, err
 			}
-			appendSpeechSegment(&response.Segments, segment)
 		}
 	}
 	for _, text := range splitter.Flush() {
-		segment, err := p.synthesizeSegment(ctx, sessionID, text)
-		if err != nil {
+		if err := p.emitSegment(ctx, sessionID, text, &response); err != nil {
 			return Response{}, err
 		}
-		appendSpeechSegment(&response.Segments, segment)
 	}
 	response.Assistant = assistant.String()
 	return response, nil
@@ -244,11 +263,9 @@ func (p *Pipeline) RespondWithTools(ctx context.Context, sessionID string, promp
 			}
 			if strings.TrimSpace(toolMessage.Content) != "" {
 				response.Assistant += toolMessage.Content
-				segment, err := p.synthesizeSegment(ctx, sessionID, toolMessage.Content)
-				if err != nil {
+				if err := p.emitSegment(ctx, sessionID, toolMessage.Content, &response); err != nil {
 					return Response{}, err
 				}
-				appendSpeechSegment(&response.Segments, segment)
 			}
 		}
 		if len(response.Segments) > 0 {
@@ -301,11 +318,9 @@ func (p *Pipeline) RespondWithIntentTools(ctx context.Context, sessionID string,
 			continue
 		}
 		response.Assistant += toolMessage.Content
-		segment, err := p.synthesizeSegment(ctx, sessionID, toolMessage.Content)
-		if err != nil {
+		if err := p.emitSegment(ctx, sessionID, toolMessage.Content, &response); err != nil {
 			return Response{}, false, err
 		}
-		appendSpeechSegment(&response.Segments, segment)
 	}
 	return response, true, nil
 }
@@ -313,7 +328,7 @@ func (p *Pipeline) RespondWithIntentTools(ctx context.Context, sessionID string,
 func (p *Pipeline) consumeLLMEvents(ctx context.Context, sessionID string, stream <-chan LLMEvent, response *Response) (string, []ToolCall, error) {
 	var builder strings.Builder
 	var calls []ToolCall
-	splitter := NewSentenceSplitter()
+	splitter := p.newSplitter()
 	for event := range stream {
 		if event.ToolCall != nil {
 			calls = append(calls, *event.ToolCall)
@@ -321,19 +336,15 @@ func (p *Pipeline) consumeLLMEvents(ctx context.Context, sessionID string, strea
 		}
 		builder.WriteString(event.Content)
 		for _, text := range splitter.Push(event.Content) {
-			segment, err := p.synthesizeSegment(ctx, sessionID, text)
-			if err != nil {
+			if err := p.emitSegment(ctx, sessionID, text, response); err != nil {
 				return "", nil, err
 			}
-			appendSpeechSegment(&response.Segments, segment)
 		}
 	}
 	for _, text := range splitter.Flush() {
-		segment, err := p.synthesizeSegment(ctx, sessionID, text)
-		if err != nil {
+		if err := p.emitSegment(ctx, sessionID, text, response); err != nil {
 			return "", nil, err
 		}
-		appendSpeechSegment(&response.Segments, segment)
 	}
 	return builder.String(), calls, nil
 }
@@ -374,6 +385,23 @@ func (p *Pipeline) synthesizeSegment(ctx context.Context, sessionID string, text
 		return SpeechSegment{}, err
 	}
 	return SpeechSegment{Text: text, Audio: audio}, nil
+}
+
+// emitSegment 合成一段、可选流式推送、并记录到 response.Segments。
+// onSegment 非 nil 时同步流式（合成出即推送）；返回其错误（如取消 sentinel）则中止。
+// onSegment 为 nil 时与旧行为一致（合成后仅 append）。
+func (p *Pipeline) emitSegment(ctx context.Context, sessionID, text string, response *Response) error {
+	segment, err := p.synthesizeSegment(ctx, sessionID, text)
+	if err != nil {
+		return err
+	}
+	if p.onSegment != nil {
+		if err := p.onSegment(segment); err != nil {
+			return err
+		}
+	}
+	appendSpeechSegment(&response.Segments, segment)
+	return nil
 }
 
 func buildLLMHistory(prompt string, history []Message) []Message {

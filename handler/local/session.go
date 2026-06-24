@@ -38,6 +38,11 @@ import (
 
 const writeQueueSize = 1024
 
+// errSpeechCanceled 表示流式发送期间用户打断（speechSeq 变化）。
+// processText 视其为非错误（用户主动中止），不再记日志/返回错误，
+// 但也不会再发 TTS Stop（handleAbort 已自带 stop）。
+var errSpeechCanceled = errors.New("speech canceled")
+
 var optionalToolFactories = map[string]func() voice.Tool{
 	"play_music":      playMusicTool,
 	"get_news":        getNewsTool,
@@ -988,20 +993,42 @@ func (h *Handler) processText(ctx context.Context, transcript string) error {
 		return h.sendAuthCodePrompt(ctx, speechSeq)
 	}
 
+	// 流式发送：合成出一句即下发设备，不必等整段回复合成完毕。
+	// 用局部 streamingPipeline（不改 h.pipeline，避免并发污染共享字段），
+	// 回调在 pipeline 同 goroutine 同步执行，writeQ 仍是唯一序列化点。
+	segmentIndex := 0
+	var prevSegmentText string
+	streamingPipeline := h.pipeline.WithSegmentSink(func(seg voice.SpeechSegment) error {
+		if h.isSpeechCanceled(speechSeq) {
+			return errSpeechCanceled // 中止后续合成
+		}
+		// 段间延迟：首段无延迟（首音来源），之后每段前停顿。
+		if segmentIndex > 0 {
+			h.applySentenceDelay(prevSegmentText, speechSeq)
+		}
+		if err := h.sendSpeechSegment(seg, speechSeq); err != nil {
+			return err
+		}
+		prevSegmentText = seg.Text
+		segmentIndex++
+		return nil
+	})
+
 	var response voice.Response
 	var err error
 	if h.useFunctionCallMode() {
-		response, err = h.pipeline.RespondWithTools(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript, h.voiceTools(), h.executeToolCall)
+		response, err = streamingPipeline.RespondWithTools(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript, h.voiceTools(), h.executeToolCall)
 	} else if h.useIntentLLMMode() {
 		var handled bool
-		response, handled, err = h.pipeline.RespondWithIntentTools(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript, h.voiceTools(), h.executeToolCall)
+		response, handled, err = streamingPipeline.RespondWithIntentTools(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript, h.voiceTools(), h.executeToolCall)
 		if err == nil && !handled {
-			response, err = h.pipeline.Respond(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript)
+			response, err = streamingPipeline.Respond(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript)
 		}
 	} else {
-		response, err = h.pipeline.Respond(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript)
+		response, err = streamingPipeline.Respond(ctx, h.sessionID, h.runtime.Local.Prompt, history, transcript)
 	}
-	if err != nil {
+	// 取消视为非错误（用户主动打断），其余错误照常处理。
+	if err != nil && !errors.Is(err, errSpeechCanceled) {
 		log.Printf("llm/tts pipeline failed session_id=%s error=%v", h.sessionID, err)
 		return err
 	}
@@ -1010,8 +1037,10 @@ func (h *Handler) processText(ctx context.Context, transcript string) error {
 	}
 	log.Printf("assistant response session_id=%s segments=%d text=%q", h.sessionID, len(response.Segments), assistantHistoryContent(response))
 
-	if len(response.Segments) > 0 {
-		if err := h.sendSpeechResponse(response.Segments, speechSeq); err != nil {
+	// 流式发送已在回调内完成；此处仅补发 TTS Stop。
+	// 仅当发过至少一段且未被取消时发（取消时 handleAbort 已自带 stop）。
+	if segmentIndex > 0 && !h.isSpeechCanceled(speechSeq) {
+		if err := h.writeTTSStop(); err != nil {
 			return err
 		}
 	}

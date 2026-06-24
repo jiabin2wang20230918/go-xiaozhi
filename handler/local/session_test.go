@@ -2327,6 +2327,83 @@ func TestListenStopRunsVoicePipeline(t *testing.T) {
 	}
 }
 
+// 流式发送：第一段在整段回复（含第二段）合成完毕之前就已下发到 writeQ。
+// 证明首音延迟从"全部合成时间"降到"首段合成时间"。
+func TestProcessTextStreamsFirstSegmentBeforeFullSynthesis(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background())
+	gate := make(chan struct{})
+	tts := &gatedSegmentTTS{gate: gate}
+	// 默认无 intent mode → 走 Respond（非 tools），echo/off 配置无关。
+	h.pipeline = voice.NewPipeline(
+		fakeASR{text: "你好"},
+		fakeLLM{text: []string{"第一句。", "第二句。"}},
+		tts,
+	)
+	h.sleep = func(time.Duration) {}
+
+	// processText 在 goroutine 里跑；第二段合成会阻塞在 gate 上。
+	go func() {
+		_ = h.processUtterance(context.Background(), []voice.AudioFrame{{PCM: pcmFrame()}})
+	}()
+
+	assertSTTStartSequence(t, h, "你好")
+	// 第一段的 sentence_start + audio 应已抵达——此时第二段仍阻塞在合成中。
+	start := recvAs[*xiaozhiapi.ServerEventTTS](t, h)
+	if start.State != xiaozhiapi.ServerTTSStateSentenceStart || start.Text != "第一句" {
+		t.Fatalf("expected first sentence_start (第一句), got state=%s text=%q", start.State, start.Text)
+	}
+	audioFrame := (<-h.Recv(context.Background())).([]byte)
+	if string(audioFrame) != "第一句" {
+		t.Fatalf("expected first segment audio, got %q", string(audioFrame))
+	}
+	// 放行第二段，让 pipeline 收尾。
+	close(gate)
+}
+
+// 流式取消：用户打断（handleAbort 递增 speechSeq）后，回调返回 errSpeechCanceled，
+// pipeline 立即停止合成后续段。证明取消现在能停掉进行中的合成，而非仅跳过发送。
+func TestAbortStopsStreamingSynthesis(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background())
+	tts := &countingSegmentTTS{}
+	h.pipeline = voice.NewPipeline(
+		fakeASR{text: "你好"},
+		fakeLLM{text: []string{"第一句。", "第二句。", "第三句。"}},
+		tts,
+	)
+	h.sleep = func(time.Duration) {}
+
+	var abortOnce sync.Once
+	h.testAfterWrite = func(event any) {
+		frame, ok := event.([]byte)
+		if !ok || string(frame) != "第一句" {
+			return
+		}
+		abortOnce.Do(func() {
+			if err := h.handleAbort(context.Background(), &xiaozhiapi.ClientEventAbort{}); err != nil {
+				t.Errorf("handleAbort: %v", err)
+			}
+		})
+	}
+
+	if err := h.processUtterance(context.Background(), []voice.AudioFrame{{PCM: pcmFrame()}}); err != nil {
+		t.Fatalf("process utterance: %v", err)
+	}
+	// abort 在第一段发送后触发：onSegment 在"合成之后"调用，故第二段可能已合成完，
+	// 但回调返回 errSpeechCanceled 后 pipeline 不再合成第三段。
+	// 关键断言：第三段绝不被合成（取消能停掉进行中的合成链）。
+	tts.mu.Lock()
+	defer tts.mu.Unlock()
+	for _, txt := range tts.texts {
+		if txt == "第三句" {
+			t.Fatalf("third segment must not be synthesized after abort, got %v", tts.texts)
+		}
+	}
+}
+
 func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
@@ -3179,6 +3256,47 @@ func (l *sequentialToolLLM) RespondWithTools(ctx context.Context, sessionID stri
 type captureSegmentTTS struct{}
 
 func (captureSegmentTTS) Synthesize(ctx context.Context, sessionID string, text string) ([][]byte, error) {
+	return [][]byte{[]byte(text)}, nil
+}
+
+// countingSegmentTTS 记录每次合成的文本（计数），用于断言流式取消后是否还合成了后续段。
+type countingSegmentTTS struct {
+	mu    sync.Mutex
+	texts []string
+	gate  chan struct{} // 可选：第二段起阻塞于此直到关闭
+}
+
+func (t *countingSegmentTTS) Synthesize(ctx context.Context, sessionID string, text string) ([][]byte, error) {
+	t.mu.Lock()
+	t.texts = append(t.texts, text)
+	count := len(t.texts)
+	t.mu.Unlock()
+	// 第二段起阻塞在 gate 上，直到测试放行——用于证明首段在后续段合成完前已发送。
+	if count >= 2 && t.gate != nil {
+		select {
+		case <-t.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return [][]byte{[]byte(text)}, nil
+}
+
+// gatedSegmentTTS 第一段立即返回，第二段阻塞在 gate 上直到关闭。
+// 用于证明流式发送：首段能在整段回复（含第二段）合成完毕之前抵达 writeQ。
+type gatedSegmentTTS struct {
+	gate chan struct{}
+	once sync.Once
+}
+
+func (t *gatedSegmentTTS) Synthesize(ctx context.Context, sessionID string, text string) ([][]byte, error) {
+	if text == "第二句" {
+		select {
+		case <-t.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return [][]byte{[]byte(text)}, nil
 }
 

@@ -185,6 +185,8 @@ tts:
   # speed: 1.0        # 语速（Kokoro LengthScale：<1 快，>1 慢）
   # silence_scale: 0.2  # 句间静音比例
   # num_threads: 4    # 推理线程数（默认 4；实测 fp32：1线程 RTF≈1.6，4线程≈0.53，8线程≈0.35）
+  # split_max_chars: 16  # 无标点时的兜底切句长度（字）：积攒到此即先合成发送一句，
+  #                       # 降低首音延迟。调小首音更快但句子更碎；仅对本地 kokoro 流式合成有意义
 
 audio:
   input_format: "wav"

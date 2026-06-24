@@ -164,6 +164,7 @@ type TTSConf struct {
 	Sid          int     `yaml:"sid"`
 	SilenceScale float64 `yaml:"silence_scale"`
 	NumThreads   int     `yaml:"num_threads"`
+	SplitMaxChars int    `yaml:"split_max_chars"`
 }
 
 type NotifyConf struct {
