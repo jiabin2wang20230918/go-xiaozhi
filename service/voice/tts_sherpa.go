@@ -107,7 +107,7 @@ func NewSherpaTTS(conf config.TTSConf) (*SherpaTTS, error) {
 				Lang:        strings.TrimSpace(conf.Lang),
 				LengthScale: speed, // Kokoro 用 LengthScale 控制语速：>1 慢，<1 快
 			},
-			NumThreads: 1,
+			NumThreads: resolveNumThreads(conf.NumThreads),
 			Debug:      0,
 		},
 		MaxNumSentences: 1,

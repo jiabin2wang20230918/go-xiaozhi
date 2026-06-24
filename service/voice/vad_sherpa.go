@@ -63,7 +63,7 @@ func NewSherpaVAD(conf config.VADConf) (*SherpaVAD, error) {
 			MaxSpeechDuration:  maxSpeech,
 		},
 		SampleRate: sampleRate,
-		NumThreads: 1,
+		NumThreads: resolveNumThreads(conf.NumThreads),
 		Provider:   "cpu",
 		Debug:      0,
 	}

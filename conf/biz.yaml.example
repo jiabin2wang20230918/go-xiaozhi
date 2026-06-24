@@ -34,6 +34,7 @@ session:
     model_dir: models/silero_vad.onnx
     threshold: 0.5
     min_silence_duration_ms: 1000
+    num_threads: 4      # 推理线程数（默认 4；VAD 很轻，1 也够，这里与 ASR/TTS 对齐）
     sample_rate: 16000
     channels: 1
     # 若不部署 sherpa 模型，改用 energy：
@@ -64,6 +65,7 @@ asr:
   output_dir: tmp
   delete_audio: true
   sample_rate: 16000
+  num_threads: 4      # 推理线程数（默认 4；单线程 RTF 已约 0.13，多线程进一步降低延迟）
   channels: 1
   # 若不部署 sherpa 模型，改用占位实现：
   # type: file_stub
@@ -182,6 +184,7 @@ tts:
   # sid: 0            # 音色 ID（multi-lang 模型含多个中英文音色，0=默认女声）
   # speed: 1.0        # 语速（Kokoro LengthScale：<1 快，>1 慢）
   # silence_scale: 0.2  # 句间静音比例
+  # num_threads: 4    # 推理线程数（默认 4；实测 fp32：1线程 RTF≈1.6，4线程≈0.53，8线程≈0.35）
 
 audio:
   input_format: "wav"

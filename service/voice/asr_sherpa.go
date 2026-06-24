@@ -59,7 +59,7 @@ func NewSherpaASR(conf config.ASRConf) (*SherpaASR, error) {
 				UseInverseTextNormalization: 1,
 			},
 			Tokens:     tokensPath,
-			NumThreads: 1,
+			NumThreads: resolveNumThreads(conf.NumThreads),
 			Provider:   "cpu",
 			Debug:      0,
 		},

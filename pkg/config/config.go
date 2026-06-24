@@ -107,6 +107,7 @@ type VADConf struct {
 	ModelDir             string            `yaml:"model_dir"`
 	MinSilenceDurationMs int               `yaml:"min_silence_duration_ms"`
 	MaxSpeechDurationS   float64           `yaml:"max_speech_duration_s"`
+	NumThreads           int               `yaml:"num_threads"`
 }
 
 type ASRConf struct {
@@ -126,6 +127,7 @@ type ASRConf struct {
 	SampleRate     int               `yaml:"sample_rate"`
 	Channels       int               `yaml:"channels"`
 	ModelDir       string            `yaml:"model_dir"`
+	NumThreads     int               `yaml:"num_threads"`
 }
 
 type TTSConf struct {
@@ -161,6 +163,7 @@ type TTSConf struct {
 	Lang         string  `yaml:"lang"`
 	Sid          int     `yaml:"sid"`
 	SilenceScale float64 `yaml:"silence_scale"`
+	NumThreads   int     `yaml:"num_threads"`
 }
 
 type NotifyConf struct {
