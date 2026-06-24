@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -110,6 +111,20 @@ func NewTTS(conf config.TTSConf) TTS {
 			FrameSize:   conf.FrameSize,
 			DeleteAudio: boolValue(conf.DeleteAudio, true),
 		}
+	case "kokoro":
+		tts, err := NewSherpaTTS(conf)
+		if err != nil {
+			log.Printf("sherpa kokoro tts unavailable (%v); falling back to stub tts", err)
+			return StubTTS{
+				SampleRate: conf.SampleRate,
+				Channels:   conf.Channels,
+				FrameSize:  conf.FrameSize,
+				DurationMs: conf.DurationMs,
+				Frequency:  conf.Frequency,
+				Amplitude:  conf.Amplitude,
+			}
+		}
+		return tts
 	default:
 		return StubTTS{
 			SampleRate: conf.SampleRate,

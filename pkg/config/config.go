@@ -153,6 +153,14 @@ type TTSConf struct {
 	Amplitude      int16             `yaml:"amplitude"`
 	LegacyURL      string            `yaml:"url"`
 	StopNotify     NotifyConf        `yaml:"stop_notify"`
+	// 本地 sherpa-onnx Kokoro TTS 相关字段。
+	ModelDir     string  `yaml:"model_dir"`
+	Voices       string  `yaml:"voices"`
+	Lexicon      string  `yaml:"lexicon"`
+	DataDir      string  `yaml:"data_dir"`
+	Lang         string  `yaml:"lang"`
+	Sid          int     `yaml:"sid"`
+	SilenceScale float64 `yaml:"silence_scale"`
 }
 
 type NotifyConf struct {
@@ -909,6 +917,8 @@ func inferLegacyTTSType(name string, conf *TTSConf) bool {
 		conf.Type = "custom"
 	case strings.Contains(lowerName, "openai") || strings.TrimSpace(conf.Model) != "" || strings.TrimSpace(conf.Voice) != "":
 		conf.Type = "openai"
+	case strings.Contains(lowerName, "kokoro"):
+		conf.Type = "kokoro"
 	case strings.Contains(lowerName, "stub"):
 		conf.Type = "stub"
 	default:
@@ -1043,6 +1053,8 @@ func isSupportedTTS(conf TTSConf) bool {
 		return strings.TrimSpace(conf.LegacyURL) != ""
 	case "command":
 		return strings.TrimSpace(conf.Command) != ""
+	case "kokoro":
+		return strings.TrimSpace(conf.ModelDir) != ""
 	default:
 		return false
 	}
@@ -1283,6 +1295,11 @@ func validateTTS(conf TTSConf) error {
 	case "command":
 		if strings.TrimSpace(conf.Command) == "" {
 			return fmt.Errorf("tts.command is required when tts.type=command")
+		}
+		return nil
+	case "kokoro":
+		if strings.TrimSpace(conf.ModelDir) == "" {
+			return fmt.Errorf("tts.model_dir is required when tts.type=kokoro")
 		}
 		return nil
 	default:

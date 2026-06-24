@@ -88,7 +88,7 @@ Legacy Python `selected_module` LLM entries with `type: ollama` or `type: xinfer
 
 ### Local Inference (sherpa-onnx)
 
-VAD and ASR can run fully offline via [sherpa-onnx-go](https://github.com/k2-fsa/sherpa-onnx-go) (CGO + prebuilt shared libs). This mirrors the Python `SileroVAD` / `FunASR(SenseVoice)` providers. If a model file is missing, the factory logs a warning and falls back to `energy` VAD / `file_stub` ASR respectively, so the server always starts.
+VAD, ASR, and TTS can run fully offline via [sherpa-onnx-go](https://github.com/k2-fsa/sherpa-onnx-go) (CGO + prebuilt shared libs). This mirrors the Python `SileroVAD` / `FunASR(SenseVoice)` providers, and adds an offline Kokoro TTS. If a model file is missing, the factory logs a warning and falls back to `energy` VAD / `file_stub` ASR / `stub` TTS respectively, so the server always starts.
 
 **VAD (Silero)** — drop `silero_vad.onnx` under `models/` (a symlink is fine):
 
@@ -117,6 +117,27 @@ asr:
   language: auto          # zh / en / ja / ko / yue / auto
   sample_rate: 16000
   channels: 1
+```
+
+**TTS (Kokoro)** — download `kokoro-multi-lang-v1_1` into `models/` (Chinese + English, 103 speakers). The model lives on Hugging Face under `csukuangfj/kokoro-multi-lang-v1_1`; GitHub releases (`tts-models/kokoro-multi-lang-v1_1.tar.bz2`) are an equivalent single tarball. Then:
+
+```bash
+# via HF mirror (China-friendly):
+HF_ENDPOINT=https://hf-mirror.com huggingface-cli download \
+  csukuangfj/kokoro-multi-lang-v1_1 --local-dir models/kokoro-multi-lang-v1_1 \
+  --local-dir-use-symlinks False
+```
+
+```yaml
+tts:
+  type: kokoro
+  model_dir: models/kokoro-multi-lang-v1_1
+  sid: 0                  # speaker id (0..102); 0 = default female voice
+  speed: 1.0              # Kokoro LengthScale: <1 faster, >1 slower
+  silence_scale: 0.2      # inter-sentence silence ratio
+  sample_rate: 16000
+  channels: 1
+  frame_size: 960
 ```
 
 Notes:

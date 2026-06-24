@@ -170,6 +170,18 @@ tts:
   sample_rate: 16000
   channels: 1
   frame_size: 960
+  # ----------------------------------------------------------------
+  # 本地 TTS（sherpa-onnx Kokoro，离线推理，无需联网/密钥）。
+  # 模型缺失时自动回退到 stub（正弦波提示音）。
+  # 下载：
+  #   wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2
+  #   tar xf kokoro-multi-lang-v1_1.tar.bz2 -C models && rm kokoro-multi-lang-v1_1.tar.bz2
+  # 启用：把上面 type 改为 kokoro，并取消下面注释。
+  # type: kokoro
+  # model_dir: models/kokoro-multi-lang-v1_1
+  # sid: 0            # 音色 ID（multi-lang 模型含多个中英文音色，0=默认女声）
+  # speed: 1.0        # 语速（Kokoro LengthScale：<1 快，>1 慢）
+  # silence_scale: 0.2  # 句间静音比例
 
 audio:
   input_format: "wav"
