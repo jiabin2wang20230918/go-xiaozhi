@@ -61,6 +61,7 @@ type Handler struct {
 	closed         atomic.Bool
 	speechSeq      atomic.Uint64
 	closeAfterChat atomic.Bool
+	speaking       atomic.Bool // 是否正在流式发送语音（用于 listen/start 判断是否需中止上一轮）
 	writeQ         chan any
 
 	mu             sync.Mutex
@@ -136,7 +137,7 @@ func NewHandlerWithMemory(ctx context.Context, client ClientInfo, mem memory.Sto
 		writeQ:        make(chan any, writeQueueSize),
 		listenMode:    xiaozhiapi.ClientModeAuto,
 		audioState:    sessionaudio.New(voice.NewVAD(runtime.Session.VAD), runtime.Session),
-		pipeline:      voice.NewPipelineFromConfig(runtime.ASR, runtime.LLM, runtime.TTS).WithMemory(mem),
+		pipeline:      voice.NewPipelineWithSharedModels(runtime.ASR, runtime.LLM, runtime.TTS).WithMemory(mem),
 		memory:        mem,
 		runtime:       runtime,
 		iotRegistry:   iot.NewRegistry(),
@@ -243,6 +244,11 @@ func (h *Handler) handleListen(ctx context.Context, event *xiaozhiapi.ClientEven
 	}
 	switch event.State {
 	case xiaozhiapi.ClientStateListenStart:
+		// 用户开始说话：必须中止上一轮还在流式发送的语音，否则上一轮的残余音频
+		// 会和本轮音频在设备缓冲区交错，导致播放断断续续。递增 speechSeq 让正在
+		// 发送的流式回调停下来，并补发 TTS Stop 通知设备清空播放缓冲。
+		// （注意：handleAbort 走的是设备主动 abort 消息；这里是 listen/start 静默中止。）
+		h.abortCurrentSpeech()
 		h.audioState.Start()
 	case xiaozhiapi.ClientStateListenStop:
 		result := h.audioState.Stop()
@@ -323,6 +329,24 @@ func (h *Handler) handleAbort(ctx context.Context, event *xiaozhiapi.ClientEvent
 		return h.Close(context.Background())
 	}
 	return nil
+}
+
+// abortCurrentSpeech 静默中止当前正在发送的语音（用于 listen/start：用户开始说话时）。
+// 仅当确有语音在途（speaking=true）才中止，避免无语音时空发 TTS Stop 让设备困惑。
+// 与 handleAbort 的区别：不发协议级 abort 消息、不动音频接收状态（马上要收新音频），
+// 仅递增 speechSeq（让流式发送回调停止后续段）+ 发 TTS Stop（通知设备清空播放缓冲）。
+func (h *Handler) abortCurrentSpeech() {
+	if !h.speaking.Load() {
+		return
+	}
+	h.speechSeq.Add(1)
+	_ = h.write(&xiaozhiapi.ServerEventTTS{
+		ServerEventBase: xiaozhiapi.ServerEventBase{
+			Type:      xiaozhiapi.ServerEventTypeTTS,
+			SessionId: h.sessionID,
+		},
+		State: xiaozhiapi.ServerTTSStateStop,
+	})
 }
 
 func (h *Handler) handleIot(ctx context.Context, event *xiaozhiapi.ClientEventIot) error {
@@ -996,20 +1020,22 @@ func (h *Handler) processText(ctx context.Context, transcript string) error {
 	// 流式发送：合成出一句即下发设备，不必等整段回复合成完毕。
 	// 用局部 streamingPipeline（不改 h.pipeline，避免并发污染共享字段），
 	// 回调在 pipeline 同 goroutine 同步执行，writeQ 仍是唯一序列化点。
+	// speaking 标志标记"有语音在途"，供 listen/start 判断是否需中止上一轮。
+	h.speaking.Store(true)
+	defer h.speaking.Store(false)
 	segmentIndex := 0
-	var prevSegmentText string
 	streamingPipeline := h.pipeline.WithSegmentSink(func(seg voice.SpeechSegment) error {
 		if h.isSpeechCanceled(speechSeq) {
 			return errSpeechCanceled // 中止后续合成
 		}
-		// 段间延迟：首段无延迟（首音来源），之后每段前停顿。
+		// 流式段间间隔：首段无延迟（首音来源），之后用流式专用的小间隔
+		// （streaming_gap_ms，默认 0），而非批量路径的完整段间延迟。
 		if segmentIndex > 0 {
-			h.applySentenceDelay(prevSegmentText, speechSeq)
+			h.applyStreamingGap(speechSeq)
 		}
 		if err := h.sendSpeechSegment(seg, speechSeq); err != nil {
 			return err
 		}
-		prevSegmentText = seg.Text
 		segmentIndex++
 		return nil
 	})
@@ -2107,6 +2133,24 @@ func (h *Handler) applySentenceDelay(text string, speechSeq uint64) {
 		sleep = time.Sleep
 	}
 	sleep(time.Duration(delayMs) * time.Millisecond)
+}
+
+// applyStreamingGap 是流式发送路径专用的段间间隔（见 SentenceDelayConf.StreamingGapMs）。
+// 与 applySentenceDelay 不同：流式边合成边发送已有天然合成间隙，不再叠加批量路径的
+// 完整段间延迟（base + 长句额外），否则短句多的回复会听起来断断续续。
+func (h *Handler) applyStreamingGap(speechSeq uint64) {
+	if h.isSpeechCanceled(speechSeq) {
+		return
+	}
+	gapMs := h.runtime.SentenceDelay.StreamingGapMs
+	if gapMs <= 0 {
+		return
+	}
+	sleep := h.sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	sleep(time.Duration(gapMs) * time.Millisecond)
 }
 
 func (h *Handler) sendSpeechSegment(segment voice.SpeechSegment, speechSeq uint64) error {

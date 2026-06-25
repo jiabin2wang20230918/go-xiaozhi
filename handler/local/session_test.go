@@ -2404,6 +2404,71 @@ func TestAbortStopsStreamingSynthesis(t *testing.T) {
 	}
 }
 
+// listen/start 在上一轮语音仍在途（流式发送中）时，必须中止它：递增 speechSeq、
+// 发 TTS Stop（让设备清空缓冲），并停止后续段合成。这解决了"第二句断断续续"——
+// 上一轮残余音频不再和本轮交错。无语音在途时则不发空 stop。
+func TestListenStartAbortsInFlightStreamingSpeech(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background())
+	gate := make(chan struct{})
+	tts := &gatedSegmentTTS{gate: gate}
+	h.pipeline = voice.NewPipeline(
+		fakeASR{text: "你好"},
+		fakeLLM{text: []string{"第一句。", "第二句。"}},
+		tts,
+	)
+	h.sleep = func(time.Duration) {}
+
+	// 上一轮回复在 goroutine 里跑；第二段合成阻塞在 gate 上 → speaking 保持 true。
+	go func() {
+		_ = h.processUtterance(context.Background(), []voice.AudioFrame{{PCM: pcmFrame()}})
+	}()
+
+	assertSTTStartSequence(t, h, "你好")
+	// 第一段完整序列 sentence_start → audio → sentence_end 已抵达
+	// （speaking=true，第二段仍阻塞在合成中，上一轮在途）。
+	firstEnd, _ := drainUntilTTSState(t, h, xiaozhiapi.ServerTTSStateSentenceEnd)
+	if firstEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd {
+		t.Fatalf("expected first sentence_end, got %s", firstEnd.State)
+	}
+
+	// 用户开始说话（设备发 listen/start）。此时应中止上一轮在途语音。
+	if err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventListen{
+		State: xiaozhiapi.ClientStateListenStart,
+		Mode:  xiaozhiapi.ClientModeAuto,
+	}); err != nil {
+		t.Fatalf("dispatch listen start: %v", err)
+	}
+	// 应收到 TTS Stop（通知设备清空缓冲）。
+	stop := recvAs[*xiaozhiapi.ServerEventTTS](t, h)
+	if stop.State != xiaozhiapi.ServerTTSStateStop {
+		t.Fatalf("expected tts stop after listen/start aborted in-flight speech, got %s", stop.State)
+	}
+	// 放行阻塞的第二段，让上一轮 goroutine 收尾（回调已被取消，不再发送）。
+	close(gate)
+}
+
+// 对照：无语音在途时 listen/start 不应发空 TTS Stop（避免设备困惑）。
+func TestListenStartDoesNotEmitStopWhenNoSpeechInFlight(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background())
+
+	if err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventListen{
+		State: xiaozhiapi.ClientStateListenStart,
+		Mode:  xiaozhiapi.ClientModeManual,
+	}); err != nil {
+		t.Fatalf("dispatch listen start: %v", err)
+	}
+	// 无语音在途：writeQ 应为空，不发 stop。
+	select {
+	case event := <-h.Recv(context.Background()):
+		t.Fatalf("expected no event when no speech in flight, got %T", event)
+	default:
+	}
+}
+
 func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
