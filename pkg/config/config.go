@@ -92,6 +92,11 @@ type SentenceDelayConf struct {
 	Dynamic             bool `yaml:"dynamic"`
 	LengthThreshold     int  `yaml:"length_threshold"`
 	LongSentenceExtraMs int  `yaml:"long_sentence_extra_ms"`
+	// StreamingGapMs 是"流式发送"路径下分段之间的间隔（ms）。
+	// 流式边合成边发送，本就有天然合成间隙，再叠加批量路径的完整段间延迟
+	// （base + 长句额外）会让短句多的回复听起来断断续续。流式路径只用这个
+	// 较小（或 0）的固定间隔。<=0 表示流式段间无延迟。仅影响本地 TTS 流式合成。
+	StreamingGapMs int `yaml:"streaming_gap_ms"`
 }
 
 type VADConf struct {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 	"github.com/xdimtech/go-xiaozhi/pkg/audio"
@@ -13,8 +14,9 @@ import (
 )
 
 // SherpaTTS wraps sherpa-onnx offline Kokoro TTS for local, offline speech
-// synthesis. It mirrors the pattern of SherpaASR / SherpaVAD: the model is
-// loaded once per session and Synthesize runs inference in one shot.
+// synthesis. It mirrors the pattern of SherpaASR / SherpaVAD.
+// tts 实例可被多个会话共享（模型预加载）；mu 保护 GenerateWithConfig 推理
+// 串行化，因为 sherpa Go 绑定未保证 OfflineTts.Generate 的并发安全。
 type SherpaTTS struct {
 	tts          *sherpa.OfflineTts
 	sampleRate   int
@@ -23,6 +25,7 @@ type SherpaTTS struct {
 	sid          int
 	speed        float32
 	silenceScale float32
+	mu           sync.Mutex
 }
 
 // NewSherpaTTS loads the Kokoro model. modelDir must point at the unpacked
@@ -142,11 +145,13 @@ func (t *SherpaTTS) Synthesize(ctx context.Context, sessionID string, text strin
 	default:
 	}
 
+	t.mu.Lock()
 	generated := t.tts.GenerateWithConfig(text, &sherpa.GenerationConfig{
 		Sid:          t.sid,
 		Speed:        t.speed,
 		SilenceScale: t.silenceScale,
 	}, nil)
+	t.mu.Unlock()
 	if generated == nil || len(generated.Samples) == 0 {
 		return nil, fmt.Errorf("kokoro tts produced no audio for %q", text)
 	}

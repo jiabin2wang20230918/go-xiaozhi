@@ -54,6 +54,7 @@ sentence_delay:
   dynamic: true
   length_threshold: 30
   long_sentence_extra_ms: 300
+  streaming_gap_ms: 0   # 流式发送（本地 TTS 边合成边发）时分段间隔；流式已有合成间隙，不再叠加上面完整延迟，否则断续。0=无延迟
 
 asr:
   # 本地 SenseVoice ASR（基于 sherpa-onnx，与 Python 版 FunASR(SenseVoiceSmall) 同源）。
@@ -185,8 +186,9 @@ tts:
   # speed: 1.0        # 语速（Kokoro LengthScale：<1 快，>1 慢）
   # silence_scale: 0.2  # 句间静音比例
   # num_threads: 4    # 推理线程数（默认 4；实测 fp32：1线程 RTF≈1.6，4线程≈0.53，8线程≈0.35）
-  # split_max_chars: 16  # 无标点时的兜底切句长度（字）：积攒到此即先合成发送一句，
-  #                       # 降低首音延迟。调小首音更快但句子更碎；仅对本地 kokoro 流式合成有意义
+  # split_max_chars: 40  # 无标点时的兜底切句长度（字）：积攒到此即先合成发送一句。
+  #                       # 调小首音更快但句子更碎（段多→CPU启动开销叠加+段间静音多→断续）；
+  #                       # 调大句子更连贯但首音稍晚。40 是连贯与首音的平衡。仅本地 kokoro 流式合成
 
 audio:
   input_format: "wav"

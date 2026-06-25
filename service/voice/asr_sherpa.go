@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 	"github.com/xdimtech/go-xiaozhi/pkg/audio"
@@ -14,11 +15,14 @@ import (
 
 // SherpaASR wraps sherpa-onnx offline SenseVoice recognizer for local speech
 // recognition. It mirrors Python's FunASR(SenseVoiceSmall) provider.
+// recognizer 实例可被多个会话共享（模型预加载）；mu 保护 Decode 推理串行化，
+// 因为 sherpa Go 绑定未保证 OfflineRecognizer.Decode 的并发安全。
 type SherpaASR struct {
 	recognizer *sherpa.OfflineRecognizer
 	sampleRate int
 	channels   int
 	language   string
+	mu         sync.Mutex
 }
 
 // NewSherpaASR loads the SenseVoice model. modelDir must point at the unpacked
@@ -92,7 +96,9 @@ func (a *SherpaASR) Transcribe(ctx context.Context, sessionID string, frames []A
 	stream := sherpa.NewOfflineStream(a.recognizer)
 	defer sherpa.DeleteOfflineStream(stream)
 	stream.AcceptWaveform(a.sampleRate, samples)
+	a.mu.Lock()
 	a.recognizer.Decode(stream)
+	a.mu.Unlock()
 	result := stream.GetResult()
 	if result == nil {
 		return "", nil
