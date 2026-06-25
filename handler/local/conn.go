@@ -102,6 +102,11 @@ func (w *ConnWrapper) WriteLoop(ctx context.Context) {
 				return
 			}
 			if _, ok := xiaozhiapi.IsServerEvent(event); ok {
+				// 每段语音开始时重置流控，避免 position/sent 跨段累积导致后续段节流失效
+				// （否则第二段起音频瞬间灌入设备缓冲，播放断续）。
+				if tts, ok := event.(*xiaozhiapi.ServerEventTTS); ok && tts.State == xiaozhiapi.ServerTTSStateSentenceStart {
+					audioFlow.reset()
+				}
 				buf, err := w.handler.MarshalServerEvent(event)
 				if err == nil {
 					if err := w.writeMessage(websocket.TextMessage, buf); err != nil {

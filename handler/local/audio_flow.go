@@ -57,3 +57,16 @@ func (c *audioFlowController) beforeBinaryFrame() {
 	}
 	c.sent++
 }
+
+// reset 把流控状态清零。必须在每个 TTS 段（sentence）开始时调用——
+// 否则 position/sent 跨段累积，第二段起 now() 远超 start+position，
+// 节流失效（delay 为负不 sleep），音频瞬间灌入设备缓冲导致播放断续。
+// Python 版每段独立 sendAudio（各自重置 start_time/play_position），此处对齐。
+func (c *audioFlowController) reset() {
+	if c == nil {
+		return
+	}
+	c.sent = 0
+	c.position = 0
+	c.start = time.Time{}
+}
