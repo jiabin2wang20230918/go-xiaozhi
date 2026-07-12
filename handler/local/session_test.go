@@ -3384,6 +3384,10 @@ func (m *fakeMemory) Save(ctx context.Context, messages []voice.Message) (string
 	return "", nil
 }
 
+func (m *fakeMemory) Close(ctx context.Context) error {
+	return nil
+}
+
 type failingMemory struct {
 	err error
 }
@@ -3398,6 +3402,10 @@ func (m failingMemory) Query(ctx context.Context, query string) (string, error) 
 
 func (m failingMemory) Save(ctx context.Context, messages []voice.Message) (string, error) {
 	return "", m.err
+}
+
+func (m failingMemory) Close(ctx context.Context) error {
+	return nil
 }
 
 func pcmFrame() *audio.PCMFrame {

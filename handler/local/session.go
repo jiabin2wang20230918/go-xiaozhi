@@ -163,6 +163,9 @@ func (h *Handler) Recv(ctx context.Context) chan any {
 func (h *Handler) Close(ctx context.Context) error {
 	if h.closed.CompareAndSwap(false, true) {
 		h.saveMemory(ctx)
+		if h.memory != nil {
+			_ = h.memory.Close(ctx)
+		}
 		if h.cancel != nil {
 			h.cancel()
 		}

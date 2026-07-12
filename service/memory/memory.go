@@ -17,6 +17,7 @@ type Store interface {
 	Init(ctx context.Context, roleID string) error
 	Query(ctx context.Context, query string) (string, error)
 	Save(ctx context.Context, messages []voice.Message) (string, error)
+	Close(ctx context.Context) error
 }
 
 func New(conf config.MemoryConf) Store {
@@ -26,6 +27,8 @@ func New(conf config.MemoryConf) Store {
 			Path:   conf.Path,
 			MaxLen: conf.MaxLen,
 		}
+	case "mlat", "tree", "mlat_tree":
+		return NewMLATStore(conf)
 	default:
 		return NoopStore{}
 	}
@@ -43,6 +46,10 @@ func (NoopStore) Query(ctx context.Context, query string) (string, error) {
 
 func (NoopStore) Save(ctx context.Context, messages []voice.Message) (string, error) {
 	return "", nil
+}
+
+func (NoopStore) Close(ctx context.Context) error {
+	return nil
 }
 
 type LocalShortStore struct {
@@ -106,6 +113,10 @@ func (s *LocalShortStore) Save(ctx context.Context, messages []voice.Message) (s
 		return "", err
 	}
 	return s.memory, nil
+}
+
+func (s *LocalShortStore) Close(ctx context.Context) error {
+	return nil
 }
 
 func (s *LocalShortStore) loadAll() (map[string]string, error) {

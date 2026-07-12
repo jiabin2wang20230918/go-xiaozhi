@@ -87,6 +87,10 @@ memory:
   type: none
   path: data/.memory.yaml
   max_len: 4000
+  # mlat only (type: mlat): per-device SQLite memory with search + confidence.
+  # path: data/memory           # workspace root; each device gets a subdir
+  # search_limit: 5             # top-K results returned per query
+  # schedule: false             # enable background daily maintenance
 
 intent:
   exit_commands:

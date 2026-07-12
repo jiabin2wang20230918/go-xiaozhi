@@ -189,9 +189,11 @@ type LLMConf struct {
 }
 
 type MemoryConf struct {
-	Type   string `yaml:"type"`
-	Path   string `yaml:"path"`
-	MaxLen int    `yaml:"max_len"`
+	Type        string `yaml:"type"`
+	Path        string `yaml:"path"`
+	MaxLen      int    `yaml:"max_len"`
+	SearchLimit int    `yaml:"search_limit"` // mlat: top-K results returned per Query (default 5)
+	Schedule    bool   `yaml:"schedule"`     // mlat: enable background daily maintenance (default false)
 }
 
 type PrivateConfigConf struct {
@@ -1089,7 +1091,7 @@ func shouldUseLegacyMemory(conf MemoryConf) bool {
 
 func isSupportedMemory(conf MemoryConf) bool {
 	switch strings.TrimSpace(conf.Type) {
-	case "", "none", "local_short":
+	case "", "none", "local_short", "mlat", "tree", "mlat_tree":
 		return true
 	default:
 		return false
@@ -1102,6 +1104,8 @@ func (c *MemoryConf) Normalize() {
 		c.Type = "none"
 	case "mem_local_short":
 		c.Type = "local_short"
+	case "tree", "mlat_tree":
+		c.Type = "mlat"
 	}
 }
 
