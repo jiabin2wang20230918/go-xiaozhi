@@ -28,6 +28,7 @@ type StubTTS struct {
 	DurationMs int
 	Frequency  float64
 	Amplitude  int16
+	Gain       float32
 }
 
 type OpenAITTS struct {
@@ -40,6 +41,7 @@ type OpenAITTS struct {
 	SampleRate     int
 	Channels       int
 	FrameSize      int
+	Gain           float32
 	HTTPClient     *http.Client
 }
 
@@ -51,6 +53,7 @@ type CustomTTS struct {
 	SampleRate int
 	Channels   int
 	FrameSize  int
+	Gain       float32
 	HTTPClient *http.Client
 }
 
@@ -64,9 +67,11 @@ type CommandTTS struct {
 	Channels    int
 	FrameSize   int
 	DeleteAudio bool
+	Gain        float32
 }
 
 func NewTTS(conf config.TTSConf) TTS {
+	gain := normalizeTTSGain(conf.Gain)
 	switch conf.Type {
 	case "", "stub":
 		return StubTTS{
@@ -76,6 +81,7 @@ func NewTTS(conf config.TTSConf) TTS {
 			DurationMs: conf.DurationMs,
 			Frequency:  conf.Frequency,
 			Amplitude:  conf.Amplitude,
+			Gain:       gain,
 		}
 	case "openai":
 		return &OpenAITTS{
@@ -88,6 +94,7 @@ func NewTTS(conf config.TTSConf) TTS {
 			SampleRate:     conf.SampleRate,
 			Channels:       conf.Channels,
 			FrameSize:      conf.FrameSize,
+			Gain:           gain,
 		}
 	case "custom":
 		return &CustomTTS{
@@ -98,6 +105,7 @@ func NewTTS(conf config.TTSConf) TTS {
 			SampleRate: conf.SampleRate,
 			Channels:   conf.Channels,
 			FrameSize:  conf.FrameSize,
+			Gain:       gain,
 		}
 	case "command":
 		return &CommandTTS{
@@ -110,6 +118,7 @@ func NewTTS(conf config.TTSConf) TTS {
 			Channels:    conf.Channels,
 			FrameSize:   conf.FrameSize,
 			DeleteAudio: boolValue(conf.DeleteAudio, true),
+			Gain:        gain,
 		}
 	case "kokoro":
 		tts, err := NewSherpaTTS(conf)
@@ -122,6 +131,7 @@ func NewTTS(conf config.TTSConf) TTS {
 				DurationMs: conf.DurationMs,
 				Frequency:  conf.Frequency,
 				Amplitude:  conf.Amplitude,
+				Gain:       gain,
 			}
 		}
 		return tts
@@ -133,8 +143,17 @@ func NewTTS(conf config.TTSConf) TTS {
 			DurationMs: conf.DurationMs,
 			Frequency:  conf.Frequency,
 			Amplitude:  conf.Amplitude,
+			Gain:       gain,
 		}
 	}
+}
+
+// normalizeTTSGain 把缺省/非正的 gain 归一为 1.0（不放大），避免零增益导致静音。
+func normalizeTTSGain(gain float32) float32 {
+	if gain <= 0 {
+		return 1.0
+	}
+	return gain
 }
 
 func boolValue(value *bool, fallback bool) bool {
@@ -190,7 +209,7 @@ func (t *CommandTTS) Synthesize(ctx context.Context, sessionID string, text stri
 	if len(data) == 0 {
 		return nil, fmt.Errorf("tts command output is empty: %s", outputPath)
 	}
-	return encodeAudioResponseToOpus(ctx, data, format, t.SampleRate, t.Channels, t.FrameSize)
+	return encodeAudioResponseToOpus(ctx, data, format, t.SampleRate, t.Channels, t.FrameSize, t.Gain)
 }
 
 func (t *OpenAITTS) Synthesize(ctx context.Context, sessionID string, text string) ([][]byte, error) {
@@ -240,6 +259,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, sessionID string, text strin
 	if err != nil {
 		return nil, err
 	}
+	pcm.Samples = audio.ApplyGain(pcm.Samples, t.Gain)
 	return encodePCMToOpus(pcm, t.SampleRate, t.Channels, t.FrameSize)
 }
 
@@ -288,7 +308,7 @@ func (t *CustomTTS) Synthesize(ctx context.Context, sessionID string, text strin
 	if err != nil {
 		return nil, err
 	}
-	return encodeAudioResponseToOpus(ctx, data, format, t.SampleRate, t.Channels, t.FrameSize)
+	return encodeAudioResponseToOpus(ctx, data, format, t.SampleRate, t.Channels, t.FrameSize, t.Gain)
 }
 
 func customTTSParamValue(value any, text string) string {
@@ -397,7 +417,7 @@ func encodePCMToOpus(pcm audio.PCMFrame, sampleRate int, channels int, frameSize
 	return encoder.Encode(pcm.Samples)
 }
 
-func encodeAudioResponseToOpus(ctx context.Context, data []byte, format string, sampleRate int, channels int, frameSize int) ([][]byte, error) {
+func encodeAudioResponseToOpus(ctx context.Context, data []byte, format string, sampleRate int, channels int, frameSize int, gain float32) ([][]byte, error) {
 	format = strings.TrimSpace(strings.ToLower(format))
 	if format == "" {
 		format = "wav"
@@ -407,12 +427,14 @@ func encodeAudioResponseToOpus(ctx context.Context, data []byte, format string, 
 		if err != nil {
 			return nil, err
 		}
+		pcm.Samples = audio.ApplyGain(pcm.Samples, gain)
 		return encodePCMToOpus(pcm, sampleRate, channels, frameSize)
 	}
 	pcm, err := decodeAudioWithFFmpeg(ctx, data, format, sampleRate, channels)
 	if err != nil {
 		return nil, err
 	}
+	pcm.Samples = audio.ApplyGain(pcm.Samples, gain)
 	return encodePCMToOpus(pcm, sampleRate, channels, frameSize)
 }
 
@@ -482,7 +504,7 @@ func (t StubTTS) Synthesize(ctx context.Context, sessionID string, text string) 
 		amplitude = 1200
 	}
 
-	samples := tonePCM(sampleRate, channels, durationMs, frequency, amplitude)
+	samples := audio.ApplyGain(tonePCM(sampleRate, channels, durationMs, frequency, amplitude), t.Gain)
 	encoder, err := audio.NewOpusEncoder(audio.OpusEncoderConfig{
 		SampleRate: sampleRate,
 		Channels:   channels,

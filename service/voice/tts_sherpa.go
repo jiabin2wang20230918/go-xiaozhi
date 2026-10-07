@@ -25,6 +25,7 @@ type SherpaTTS struct {
 	sid          int
 	speed        float32
 	silenceScale float32
+	gain         float32
 	mu           sync.Mutex
 }
 
@@ -98,6 +99,10 @@ func NewSherpaTTS(conf config.TTSConf) (*SherpaTTS, error) {
 	if silenceScale <= 0 {
 		silenceScale = 0.2 // 与官方示例一致，句间停顿稍短，更连贯
 	}
+	gain := conf.Gain
+	if gain <= 0 {
+		gain = 1.0
+	}
 
 	cfg := &sherpa.OfflineTtsConfig{
 		Model: sherpa.OfflineTtsModelConfig{
@@ -128,6 +133,7 @@ func NewSherpaTTS(conf config.TTSConf) (*SherpaTTS, error) {
 		sid:          conf.Sid,
 		speed:        speed,
 		silenceScale: silenceScale,
+		gain:         gain,
 	}, nil
 }
 
@@ -159,7 +165,7 @@ func (t *SherpaTTS) Synthesize(ctx context.Context, sessionID string, text strin
 	pcm := audio.PCMFrame{
 		SampleRate: generated.SampleRate,
 		Channels:   1,
-		Samples:    float32ToInt16PCM(generated.Samples),
+		Samples:    audio.ApplyGain(float32ToInt16PCM(generated.Samples), t.gain),
 	}
 	return encodePCMToOpus(pcm, t.sampleRate, t.channels, t.frameSize)
 }

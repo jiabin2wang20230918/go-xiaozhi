@@ -136,11 +136,13 @@ func (d *OpusDecoder) Decode(packet []byte) (PCMFrame, error) {
 	return PCMFrame{
 		SampleRate: d.sampleRate,
 		Channels:   d.channels,
-		Samples:    applyGain(pcm, d.gain),
+		Samples:    ApplyGain(pcm, d.gain),
 	}, nil
 }
 
-func applyGain(input []int16, gain float32) []int16 {
+// ApplyGain 缩放 int16 PCM 采样值，用于统一调整输出音量。gain=1 直接返回
+// 拷贝（不放大），>1 放大（自动按 int16 范围限幅，避免削波失真），<1 衰减。
+func ApplyGain(input []int16, gain float32) []int16 {
 	if gain == 1 {
 		return append([]int16(nil), input...)
 	}
