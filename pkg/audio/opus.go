@@ -141,14 +141,35 @@ func (d *OpusDecoder) Decode(packet []byte) (PCMFrame, error) {
 }
 
 // ApplyGain 缩放 int16 PCM 采样值，用于统一调整输出音量。gain=1 直接返回
-// 拷贝（不放大），>1 放大（自动按 int16 范围限幅，避免削波失真），<1 衰减。
+// 拷贝（不放大），<1 衰减，>1 放大（按输入峰值自适应封顶增益，保证放大后
+// 不超出 int16 范围，避免削波失真；全静音输入直接返回拷贝）。
 func ApplyGain(input []int16, gain float32) []int16 {
 	if gain == 1 {
 		return append([]int16(nil), input...)
 	}
+	if gain > 1 {
+		// 用 int32 累计绝对值峰值，规避 -32768 取负溢出。
+		var peak int32
+		for _, sample := range input {
+			abs := int32(sample)
+			if abs < 0 {
+				abs = -abs
+			}
+			if abs > peak {
+				peak = abs
+			}
+		}
+		if peak == 0 {
+			return append([]int16(nil), input...)
+		}
+		if maxGain := float32(math.MaxInt16) / float32(peak); gain > maxGain {
+			gain = maxGain
+		}
+	}
 	output := make([]int16, len(input))
 	for i, sample := range input {
 		adjusted := float32(sample) * gain
+		// 封顶后理论上不会越界，限幅仅作为 float 舍入的安全网。
 		switch {
 		case adjusted > math.MaxInt16:
 			output[i] = math.MaxInt16

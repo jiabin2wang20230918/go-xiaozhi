@@ -170,8 +170,8 @@ type TTSConf struct {
 	SilenceScale float64 `yaml:"silence_scale"`
 	NumThreads   int     `yaml:"num_threads"`
 	SplitMaxChars int    `yaml:"split_max_chars"`
-	// Gain 控制 TTS 播放音量倍数：1.0=原始，>1 调大（自动限幅），<1 调小。
-	// 缺省或 0 视为 1.0（不放大）。作用于所有 TTS 后端编码为 opus 之前的 PCM。
+	// Gain 控制 TTS 播放音量倍数：1.0=原始，>1 调大（按峰值封顶增益，不削波），
+	// <1 调小。缺省或 0 视为 1.0（不放大）。作用于所有 TTS 后端编码为 opus 之前的 PCM。
 	Gain float32 `yaml:"gain"`
 }
 

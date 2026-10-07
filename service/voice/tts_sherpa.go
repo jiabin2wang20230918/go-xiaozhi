@@ -99,10 +99,7 @@ func NewSherpaTTS(conf config.TTSConf) (*SherpaTTS, error) {
 	if silenceScale <= 0 {
 		silenceScale = 0.2 // 与官方示例一致，句间停顿稍短，更连贯
 	}
-	gain := conf.Gain
-	if gain <= 0 {
-		gain = 1.0
-	}
+	gain := normalizeTTSGain(conf.Gain)
 
 	cfg := &sherpa.OfflineTtsConfig{
 		Model: sherpa.OfflineTtsModelConfig{
