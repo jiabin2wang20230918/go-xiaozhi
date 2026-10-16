@@ -62,6 +62,23 @@ func TestValidateCustomTTSProvider(t *testing.T) {
 	}
 }
 
+func TestValidateMatchaTTSProvider(t *testing.T) {
+	conf := BizConf{
+		Server:  ServerConf{Port: 8000},
+		Xiaozhi: XiaozhiConf{Format: "opus", Transport: "websocket"},
+		ASR:     ASRConf{Type: "file_stub"},
+		LLM:     LLMConf{Type: "echo"},
+		TTS:     TTSConf{Type: "matcha", ModelDir: "models/matcha-icefall-zh-en"},
+	}
+	if err := conf.Validate(); err != nil {
+		t.Fatalf("validate matcha tts: %v", err)
+	}
+	conf.TTS.ModelDir = ""
+	if err := conf.Validate(); err == nil {
+		t.Fatal("expected missing matcha model_dir to fail")
+	}
+}
+
 func TestValidateCommandTTSProvider(t *testing.T) {
 	conf := BizConf{
 		Server:  ServerConf{Port: 8000},

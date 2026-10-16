@@ -124,15 +124,14 @@ func NewTTS(conf config.TTSConf) TTS {
 		tts, err := NewSherpaTTS(conf)
 		if err != nil {
 			log.Printf("sherpa kokoro tts unavailable (%v); falling back to stub tts", err)
-			return StubTTS{
-				SampleRate: conf.SampleRate,
-				Channels:   conf.Channels,
-				FrameSize:  conf.FrameSize,
-				DurationMs: conf.DurationMs,
-				Frequency:  conf.Frequency,
-				Amplitude:  conf.Amplitude,
-				Gain:       gain,
-			}
+			return stubTTSFromConf(conf, gain)
+		}
+		return tts
+	case "matcha":
+		tts, err := NewSherpaMatchaTTS(conf)
+		if err != nil {
+			log.Printf("sherpa matcha tts unavailable (%v); falling back to stub tts", err)
+			return stubTTSFromConf(conf, gain)
 		}
 		return tts
 	default:
@@ -145,6 +144,18 @@ func NewTTS(conf config.TTSConf) TTS {
 			Amplitude:  conf.Amplitude,
 			Gain:       gain,
 		}
+	}
+}
+
+func stubTTSFromConf(conf config.TTSConf, gain float32) StubTTS {
+	return StubTTS{
+		SampleRate: conf.SampleRate,
+		Channels:   conf.Channels,
+		FrameSize:  conf.FrameSize,
+		DurationMs: conf.DurationMs,
+		Frequency:  conf.Frequency,
+		Amplitude:  conf.Amplitude,
+		Gain:       gain,
 	}
 }
 
