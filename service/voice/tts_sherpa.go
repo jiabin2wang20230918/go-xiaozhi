@@ -13,7 +13,7 @@ import (
 	"github.com/xdimtech/go-xiaozhi/pkg/config"
 )
 
-// SherpaTTS wraps sherpa-onnx offline Kokoro TTS for local, offline speech
+// SherpaTTS wraps sherpa-onnx offline TTS (Kokoro, Matcha, …) for local speech
 // synthesis. It mirrors the pattern of SherpaASR / SherpaVAD.
 // tts 实例可被多个会话共享（模型预加载）；mu 保护 GenerateWithConfig 推理
 // 串行化，因为 sherpa Go 绑定未保证 OfflineTts.Generate 的并发安全。
@@ -26,6 +26,7 @@ type SherpaTTS struct {
 	speed        float32
 	silenceScale float32
 	gain         float32
+	backend      string // "kokoro" or "matcha"; used only for error messages
 	mu           sync.Mutex
 }
 
@@ -131,6 +132,7 @@ func NewSherpaTTS(conf config.TTSConf) (*SherpaTTS, error) {
 		speed:        speed,
 		silenceScale: silenceScale,
 		gain:         gain,
+		backend:      "kokoro",
 	}, nil
 }
 
@@ -156,7 +158,11 @@ func (t *SherpaTTS) Synthesize(ctx context.Context, sessionID string, text strin
 	}, nil)
 	t.mu.Unlock()
 	if generated == nil || len(generated.Samples) == 0 {
-		return nil, fmt.Errorf("kokoro tts produced no audio for %q", text)
+		name := t.backend
+		if name == "" {
+			name = "sherpa"
+		}
+		return nil, fmt.Errorf("%s tts produced no audio for %q", name, text)
 	}
 
 	pcm := audio.PCMFrame{

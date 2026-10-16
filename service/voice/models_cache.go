@@ -35,6 +35,7 @@ var (
 func sherpaCacheKey(asr config.ASRConf, tts config.TTSConf) string {
 	return asr.Type + "|" + asr.ModelDir + "|" + asr.Language + "||" +
 		tts.Type + "|" + tts.ModelDir + "|" + tts.Voice + "|" +
+		tts.Vocoder + "|" + tts.VocoderPath + "|" +
 		strconv.Itoa(tts.NumThreads)
 }
 

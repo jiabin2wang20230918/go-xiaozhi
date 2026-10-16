@@ -178,8 +178,28 @@ tts:
   channels: 1
   frame_size: 960
   # ----------------------------------------------------------------
-  # 本地 TTS（sherpa-onnx Kokoro，离线推理，无需联网/密钥）。
+  # 本地 TTS（sherpa-onnx，离线推理，无需联网/密钥）。
+  # Matcha（中英、单音色）比 Kokoro 更轻，适合 RK3566 等弱 ARM 板；Kokoro 音色多但更重。
   # 模型缺失时自动回退到 stub（正弦波提示音）。
+  #
+  # --- Matcha（matcha-icefall-zh-en，16 kHz，sid=0）---
+  # 声学包：
+  #   wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2
+  #   tar xf matcha-icefall-zh-en.tar.bz2 -C models && rm matcha-icefall-zh-en.tar.bz2
+  # 声码器（必选，可与 model_dir 同级放在 models/）：
+  #   wget -O models/vocos-16khz-univ.onnx \
+  #     https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx
+  # 启用：把上面 type 改为 matcha，并取消下面注释。
+  # type: matcha
+  # model_dir: models/matcha-icefall-zh-en
+  # vocoder: models/vocos-16khz-univ.onnx
+  # sid: 0              # 仅 1 个说话人
+  # speed: 1.0          # Matcha LengthScale：<1 快，>1 慢
+  # silence_scale: 0.2
+  # num_threads: 4
+  # split_max_chars: 40 # 无标点兜底切句；仅本地 sherpa TTS 流式合成
+  #
+  # --- Kokoro（kokoro-multi-lang-v1_1，103 音色，较重）---
   # 下载：
   #   wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_1.tar.bz2
   #   tar xf kokoro-multi-lang-v1_1.tar.bz2 -C models && rm kokoro-multi-lang-v1_1.tar.bz2
@@ -192,7 +212,7 @@ tts:
   # num_threads: 4    # 推理线程数（默认 4；实测 fp32：1线程 RTF≈1.6，4线程≈0.53，8线程≈0.35）
   # split_max_chars: 40  # 无标点时的兜底切句长度（字）：积攒到此即先合成发送一句。
   #                       # 调小首音更快但句子更碎（段多→CPU启动开销叠加+段间静音多→断续）；
-  #                       # 调大句子更连贯但首音稍晚。40 是连贯与首音的平衡。仅本地 kokoro 流式合成
+  #                       # 调大句子更连贯但首音稍晚。40 是连贯与首音的平衡。仅本地 sherpa TTS 流式合成
   # ---- Kokoro multi-lang-v1_1 音色映射表（sid -> name）----
   # 前缀: af=American female(0-1) bf=British female(2) zf=中文女声(3-57) zm=中文男声(58-102)
   # 美式女声: 0->af_maple 1->af_sol
