@@ -12,6 +12,13 @@
 #
 # 可覆盖变量：
 #   make dist VERSION=v1.0.0 BINARY_NAME=xiaozhi
+#
+# Sherpa 动态库目录（与 go build / CGO 所用架构一致）：
+#   默认按本机 uname -m 选择 lib/<triple>（x86_64 / aarch64 等）。
+#   make dist ARCH=aarch64
+#   make dist SHERPA_TRIPLE=aarch64-unknown-linux-gnu
+#   make dist SHERPA_LIBDIR=/path/to/lib   # 最高优先级
+# 交叉编译时需同时设置匹配的 GOARCH 与 C 工具链；本 Makefile 不配置交叉工具链。
 
 SHELL := /bin/bash
 
@@ -27,8 +34,29 @@ GO           ?= go
 RPATH_LDFLAGS = '-Wl,-rpath,$$ORIGIN/lib'
 
 # ---- sherpa 动态库定位（从 Go module cache 中找）----
-SHERPA_MOD   := $(shell $(GO) list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-linux 2>/dev/null)
-SHERPA_LIBDIR ?= $(SHERPA_MOD)/lib/x86_64-unknown-linux-gnu
+HOST_ARCH := $(shell uname -m)
+ARCH      ?= $(HOST_ARCH)
+
+ifndef SHERPA_TRIPLE
+ifeq ($(ARCH),x86_64)
+SHERPA_TRIPLE := x86_64-unknown-linux-gnu
+else ifeq ($(ARCH),aarch64)
+SHERPA_TRIPLE := aarch64-unknown-linux-gnu
+else ifeq ($(ARCH),arm64)
+SHERPA_TRIPLE := aarch64-unknown-linux-gnu
+else ifeq ($(ARCH),armv7l)
+SHERPA_TRIPLE := arm-unknown-linux-gnueabihf
+endif
+endif
+
+ifeq ($(SHERPA_TRIPLE),)
+ifeq ($(filter command line environment override,$(origin SHERPA_LIBDIR)),)
+$(error Unsupported ARCH="$(ARCH)". Set SHERPA_TRIPLE=<triple> or SHERPA_LIBDIR=<path> (e.g. SHERPA_TRIPLE=aarch64-unknown-linux-gnu))
+endif
+endif
+
+SHERPA_MOD    := $(shell $(GO) list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-linux 2>/dev/null)
+SHERPA_LIBDIR ?= $(SHERPA_MOD)/lib/$(SHERPA_TRIPLE)
 
 # 默认目标
 .PHONY: all build dist libs run check clean help
@@ -52,8 +80,13 @@ libs: ## 拷贝 sherpa 动态库到 dist/lib
 	@mkdir -p $(DIST_DIR)/lib
 	@if [ -z "$(SHERPA_MOD)" ]; then \
 		echo ">> 注意: 未找到 sherpa-onnx-go-linux 模块，跳过动态库拷贝（VAD/ASR 将回退）"; \
+	elif [ ! -d "$(SHERPA_LIBDIR)" ]; then \
+		echo "!! sherpa 动态库目录不存在: $(SHERPA_LIBDIR)"; \
+		echo "   ARCH=$(ARCH) SHERPA_TRIPLE=$(SHERPA_TRIPLE) SHERPA_MOD=$(SHERPA_MOD)"; \
+		echo "   请确认 go mod 已拉取 sherpa-onnx-go-linux，或指定 SHERPA_TRIPLE / SHERPA_LIBDIR"; \
+		exit 1; \
 	else \
-		echo ">> 拷贝 sherpa 动态库: $(SHERPA_LIBDIR) -> $(DIST_DIR)/lib"; \
+		echo ">> 拷贝 sherpa 动态库: $(SHERPA_LIBDIR) -> $(DIST_DIR)/lib (ARCH=$(ARCH))"; \
 		cp -f $(SHERPA_LIBDIR)/*.so $(DIST_DIR)/lib/; \
 		ls -1 $(DIST_DIR)/lib/; \
 	fi
