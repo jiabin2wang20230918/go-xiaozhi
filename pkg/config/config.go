@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
@@ -50,9 +51,32 @@ type LocalProviderConf struct {
 }
 
 type ServerConf struct {
-	IP   string   `yaml:"ip"`
-	Port int      `yaml:"port"`
-	Auth AuthConf `yaml:"auth"`
+	IP     string           `yaml:"ip"`
+	Port   int              `yaml:"port"`
+	Auth   AuthConf         `yaml:"auth"`
+	Notify ServerNotifyConf `yaml:"notify"`
+}
+
+// ServerNotifyConf 是通知投递通道（/v1/notify）的服务端配置。
+// 提醒的 SoR 与调度在 Grok Bot，这里只管理短期待投递/回执状态
+// （见 docs/esp32-s3-box-3-dashboard-and-grok-reminder-plan.md §8.2）。
+type ServerNotifyConf struct {
+	Enabled    bool   `yaml:"enabled"`
+	StatePath  string `yaml:"state_path"`  // 投递状态 JSON，默认 data/notify_state.json
+	PendingTTL string `yaml:"pending_ttl"` // 离线待投递保留时长，默认 24h
+	AckedTTL   string `yaml:"acked_ttl"`   // 回执记录保留时长，默认 168h（7d）
+}
+
+func (c *ServerNotifyConf) Normalize() {
+	if strings.TrimSpace(c.StatePath) == "" {
+		c.StatePath = filepath.Join("data", "notify_state.json")
+	}
+	if _, err := time.ParseDuration(c.PendingTTL); err != nil {
+		c.PendingTTL = "24h"
+	}
+	if _, err := time.ParseDuration(c.AckedTTL); err != nil {
+		c.AckedTTL = "168h"
+	}
 }
 
 type AuthConf struct {
@@ -233,6 +257,9 @@ type DevicePrivateConf struct {
 	Owner          string                            `yaml:"owner"`
 	AuthCode       string                            `yaml:"auth_code"`
 	LastChatTime   int64                             `yaml:"last_chat_time"`
+	// DashboardLocation 是天气推送的 per-device 城市覆盖；为空时使用
+	// plugins.get_weather.default_location（见 docs 方案 §7.3）。
+	DashboardLocation string                        `yaml:"dashboard_location,omitempty"`
 	Local          *LocalProviderConf                `yaml:"local"`
 	LLM            *LLMConf                          `yaml:"llm"`
 	TTS            *TTSConf                          `yaml:"tts"`
@@ -274,6 +301,11 @@ type GetWeatherConf struct {
 	APIKey          string `yaml:"api_key"`
 	DefaultLocation string `yaml:"default_location"`
 	BaseURL         string `yaml:"base_url"`
+	// DashboardEnabled 是否向设备 Dashboard 主动推送结构化天气快照
+	// （docs 方案 §7.3 的 weather 服务端事件）。
+	DashboardEnabled    bool `yaml:"dashboard_enabled"`
+	// PushIntervalSeconds 天气推送间隔（秒），默认 1800（30 分钟）。
+	PushIntervalSeconds int `yaml:"push_interval_seconds"`
 }
 
 type BaiduSearchConf struct {
@@ -556,6 +588,11 @@ func GetConfigFilePath() string {
 	return configFileUsed
 }
 
+// BaseDir 返回运行时目录（tmp/、data/ 等相对路径的解析基准）。
+func BaseDir() string {
+	return runtimeBaseDir(configFileUsed)
+}
+
 func RuntimeWarnings() []error {
 	return append([]error(nil), runtimeWarnings...)
 }
@@ -747,6 +784,7 @@ func (c *BizConf) Normalize() {
 	c.Plugins.GetWeather.Normalize()
 	c.Plugins.BaiduSearch.Normalize()
 	c.MCP.Normalize()
+	c.Server.Notify.Normalize()
 }
 
 func (c *BizConf) applyLegacySelectedModules() {
@@ -1188,6 +1226,9 @@ func (c *GetWeatherConf) Normalize() {
 	}
 	if strings.TrimSpace(c.BaseURL) == "" {
 		c.BaseURL = "https://restapi.amap.com"
+	}
+	if c.PushIntervalSeconds <= 0 {
+		c.PushIntervalSeconds = 1800
 	}
 }
 

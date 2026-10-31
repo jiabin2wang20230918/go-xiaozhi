@@ -19,15 +19,20 @@ import (
 type WebSocketServer struct {
 	requestCounter atomic.Int64
 	auth           *auth.Authenticator
+	notify         *notifyHTTP
 	mux            *http.ServeMux
 }
 
 func NewWebSocketServer() *WebSocketServer {
+	conf := config.Get()
 	server := &WebSocketServer{
-		auth: auth.New(config.Get().Server.Auth),
+		auth: auth.New(conf.Server.Auth),
 	}
+	server.notify = newNotifyHTTP(server.auth, conf.Server.Notify, config.BaseDir())
 	server.mux = http.NewServeMux()
 	server.mux.HandleFunc("/xiaozhi/v1/", server.RealTime)
+	server.mux.HandleFunc("/v1/notify", server.notify.handleNotify)
+	server.mux.HandleFunc("/v1/devices/", server.notify.handleStatus)
 	return server
 }
 
@@ -112,6 +117,12 @@ func (s *WebSocketServer) RealTime(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 		return
 	}
+
+	// 绑定通知通道：登记在线会话、注入回执回调、补发离线期间积累的待投递项。
+	session := connWrapper.Handler()
+	deviceID := r.Header.Get("Device-Id")
+	s.BindSession(deviceID, session)
+	defer s.UnbindSession(deviceID, session)
 
 	_ = connWrapper.ReadLoop(ctx)
 }

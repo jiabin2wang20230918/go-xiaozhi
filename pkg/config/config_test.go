@@ -1841,3 +1841,46 @@ local:
   prompt: %q
 `, port, prompt))
 }
+
+func TestServerNotifyConfNormalizeDefaults(t *testing.T) {
+	conf := ServerNotifyConf{}
+	conf.Normalize()
+	if conf.StatePath != filepath.Join("data", "notify_state.json") {
+		t.Fatalf("state_path got %q", conf.StatePath)
+	}
+	if conf.PendingTTL != "24h" {
+		t.Fatalf("pending_ttl got %q", conf.PendingTTL)
+	}
+	if conf.AckedTTL != "168h" {
+		t.Fatalf("acked_ttl got %q", conf.AckedTTL)
+	}
+}
+
+func TestServerNotifyConfNormalizeKeepsExplicitValues(t *testing.T) {
+	conf := ServerNotifyConf{
+		Enabled:    true,
+		StatePath:  "/var/lib/xiaozhi/notify.json",
+		PendingTTL: "2h",
+		AckedTTL:   "48h",
+	}
+	conf.Normalize()
+	if conf.StatePath != "/var/lib/xiaozhi/notify.json" || conf.PendingTTL != "2h" || conf.AckedTTL != "48h" {
+		t.Fatalf("explicit values must be preserved: %+v", conf)
+	}
+	if !conf.Enabled {
+		t.Fatal("enabled must be preserved")
+	}
+}
+
+func TestGetWeatherConfPushIntervalDefault(t *testing.T) {
+	conf := GetWeatherConf{DefaultLocation: "深圳"}
+	conf.Normalize()
+	if conf.PushIntervalSeconds != 1800 {
+		t.Fatalf("push interval got %d want 1800", conf.PushIntervalSeconds)
+	}
+	conf.PushIntervalSeconds = 600
+	conf.Normalize()
+	if conf.PushIntervalSeconds != 600 {
+		t.Fatalf("explicit push interval overwritten: %d", conf.PushIntervalSeconds)
+	}
+}

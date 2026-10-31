@@ -10,13 +10,25 @@ import (
 type ClientEventType string
 
 const (
-	ClientEventTypeRawText      ClientEventType = "raw_text"
-	ClientEventTypeHello        ClientEventType = "hello"
-	ClientEventTypeListen       ClientEventType = "listen"
-	ClientEventTypeAppendBuffer ClientEventType = "append.buffer"
-	ClientEventTypeAbort        ClientEventType = "abort"
-	ClientEventTypeIot          ClientEventType = "iot"
-	ClientEventTypeUnknown      ClientEventType = "unknown"
+	ClientEventTypeRawText         ClientEventType = "raw_text"
+	ClientEventTypeHello           ClientEventType = "hello"
+	ClientEventTypeListen          ClientEventType = "listen"
+	ClientEventTypeAppendBuffer    ClientEventType = "append.buffer"
+	ClientEventTypeAbort           ClientEventType = "abort"
+	ClientEventTypeIot             ClientEventType = "iot"
+	ClientEventTypeNotificationAck ClientEventType = "notification_ack"
+	ClientEventTypeUnknown         ClientEventType = "unknown"
+)
+
+// NotificationAckAction 设备对 notification 的回执动作（见 docs 方案 §7.4）。
+type NotificationAckAction string
+
+const (
+	NotificationAckActionShown   NotificationAckAction = "shown"
+	NotificationAckActionAck     NotificationAckAction = "ack"
+	NotificationAckActionSnooze  NotificationAckAction = "snooze"
+	NotificationAckActionDismiss NotificationAckAction = "dismiss"
+	NotificationAckActionFailed  NotificationAckAction = "failed"
 )
 
 // ClientState 客户端监听状态
@@ -302,8 +314,26 @@ func (e *ClientEventIot) GetSessionID() string {
 	return e.SessionID
 }
 
+func (e *ClientEventNotificationAck) GetAudioParams() *AudioParams {
+	return e.AudioParams
+}
+
+func (e *ClientEventNotificationAck) GetSessionID() string {
+	return e.SessionID
+}
+
+// ClientEventNotificationAck 是设备对 notification 的回执（见 docs 方案 §7.4）。
+type ClientEventNotificationAck struct {
+	ClientEventBase
+	ID        string                `json:"id"`
+	Action    NotificationAckAction `json:"action"`
+	Timestamp int64                 `json:"timestamp,omitempty"`
+}
+
+// {'type': 'notification_ack', 'session_id': '...', 'id': 'reminder-20261030-1500', 'action': 'ack', 'timestamp': 1793334005}
+
 type ClientEventInterface interface {
-	ClientEventHello | ClientEventListen | ClientEventAbort | ClientEventIot
+	ClientEventHello | ClientEventListen | ClientEventAbort | ClientEventIot | ClientEventNotificationAck
 }
 
 func unmarshalClientEvent[T ClientEventInterface](data []byte) (*T, error) {
@@ -354,6 +384,8 @@ func UnmarshalClientEvent(data []byte) (ClientEvent, error) {
 		}
 		_ = json.Unmarshal(data, &ev.Raw)
 		return ev, nil
+	case ClientEventTypeNotificationAck:
+		return unmarshalClientEvent[ClientEventNotificationAck](data)
 	default:
 		return &ClientEventUnknown{
 			Type: eventType.Type,

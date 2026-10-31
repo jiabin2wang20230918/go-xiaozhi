@@ -23,6 +23,7 @@ import (
 	"github.com/xdimtech/go-xiaozhi/service/homeassistant"
 	"github.com/xdimtech/go-xiaozhi/service/mcp"
 	"github.com/xdimtech/go-xiaozhi/service/news"
+	"github.com/xdimtech/go-xiaozhi/service/notify"
 	"github.com/xdimtech/go-xiaozhi/service/search"
 	"github.com/xdimtech/go-xiaozhi/service/voice"
 	"github.com/xdimtech/go-xiaozhi/service/weather"
@@ -42,6 +43,10 @@ func TestMain(m *testing.M) {
 	defaults := *config.Get()
 	defaults.ASR.OutputDir = dir
 	defaults.ASR.DeleteAudio = true
+	// 测试不得依赖本地 biz.yaml：默认关闭 Dashboard 天气主动推送，
+	// 避免每个测试 handler 都去请求真实天气 API（慢且不稳定）。
+	// 需要验证推送的用例自行 Replace 配置开启。
+	defaults.Plugins.GetWeather = config.GetWeatherConf{DefaultLocation: "深圳"}
 	restore := config.Replace(defaults)
 	code := m.Run()
 	restore()
@@ -3558,4 +3563,364 @@ func runHandlerMCPHelper() {
 		}
 	}
 	os.Exit(0)
+}
+
+func TestHelloEventCarriesServerTime(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	fixed := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return fixed }
+	<-h.Recv(context.Background()) // 构造时发送的 hello
+
+	err := h.handleHello(context.Background(), &xiaozhiapi.ClientEventHello{})
+	if err != nil {
+		t.Fatalf("handle hello: %v", err)
+	}
+	hello := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventHello)
+	if hello.ServerTime != fixed.Unix() {
+		t.Fatalf("server_time got %d, want %d", hello.ServerTime, fixed.Unix())
+	}
+}
+
+func TestDispatchClientEventNotificationAckInvokesSink(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // 构造时发送的 hello
+
+	var got *xiaozhiapi.ClientEventNotificationAck
+	h.notifyAckSink = func(_ context.Context, ack *xiaozhiapi.ClientEventNotificationAck) { got = ack }
+
+	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventNotificationAck{
+		ClientEventBase: xiaozhiapi.ClientEventBase{SessionID: h.sessionID},
+		ID:              "reminder-1",
+		Action:          xiaozhiapi.NotificationAckActionSnooze,
+		Timestamp:       1793334005,
+	})
+	if err != nil {
+		t.Fatalf("dispatch ack: %v", err)
+	}
+	if quit {
+		t.Fatal("ack should not close the connection")
+	}
+	if got == nil {
+		t.Fatal("notify ack sink not called")
+	}
+	if got.ID != "reminder-1" || got.Action != xiaozhiapi.NotificationAckActionSnooze {
+		t.Fatalf("unexpected ack: %+v", got)
+	}
+}
+
+func TestDispatchClientEventNotificationAckWithoutSinkDoesNotError(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // 构造时发送的 hello
+
+	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventNotificationAck{
+		ID:     "reminder-1",
+		Action: xiaozhiapi.NotificationAckActionAck,
+	})
+	if err != nil {
+		t.Fatalf("dispatch ack without sink: %v", err)
+	}
+	if quit {
+		t.Fatal("ack should not close the connection")
+	}
+}
+
+// weatherStubServer 是假的高德接口（geocode + weatherInfo）。
+func weatherStubServer(t *testing.T, city, adcode, weather, temp, humidity string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v3/geocode/geo":
+			_, _ = fmt.Fprintf(w, `{"status":"1","geocodes":[{"city":%q,"adcode":%q}]}`, city, adcode)
+		case "/v3/weather/weatherInfo":
+			_, _ = fmt.Fprintf(w, `{"status":"1","lives":[{"weather":%q,"temperature":%q,"humidity":%q,"winddirection":"东北","windpower":"2","reporttime":"2026-10-30 14:30:00"}]}`, weather, temp, humidity)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSessionPushesWeatherOnConnect(t *testing.T) {
+	srv := weatherStubServer(t, "深圳市", "440300", "多云", "24", "68")
+
+	defaults := *config.Get()
+	defaults.Plugins.GetWeather = config.GetWeatherConf{
+		APIKey:              "test-key",
+		DefaultLocation:     "深圳",
+		BaseURL:             srv.URL,
+		DashboardEnabled:    true,
+		PushIntervalSeconds: 1800,
+	}
+	restore := config.Replace(defaults)
+	defer restore()
+
+	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+
+	// 第一条是 hello，随后应推送 weather。
+	hello := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventHello)
+	if hello.Type != xiaozhiapi.ServerEventTypeHello {
+		t.Fatalf("expected hello first, got %s", hello.Type)
+	}
+	event := <-h.Recv(context.Background())
+	weather, ok := event.(*xiaozhiapi.ServerEventWeather)
+	if !ok {
+		t.Fatalf("expected weather event, got %T", event)
+	}
+	if weather.City != "深圳市" || weather.Weather != "多云" || weather.Temperature != 24 || weather.Humidity != 68 {
+		t.Fatalf("unexpected weather snapshot: %+v", weather)
+	}
+	if weather.Wind != "东北 2级" {
+		t.Fatalf("wind got %q", weather.Wind)
+	}
+	if weather.SessionId != h.sessionID {
+		t.Fatalf("weather session_id got %q want %q", weather.SessionId, h.sessionID)
+	}
+}
+
+func TestSessionWeatherPushUsesDeviceLocationOverride(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v3/geocode/geo":
+			asked = append(asked, r.URL.Query().Get("address"))
+			_, _ = w.Write([]byte(`{"status":"1","geocodes":[{"city":"上海市","adcode":"310000"}]}`))
+		case "/v3/weather/weatherInfo":
+			_, _ = w.Write([]byte(`{"status":"1","lives":[{"weather":"小雨","temperature":"18","humidity":"80","winddirection":"东","windpower":"3","reporttime":"2026-10-30 09:00:00"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	privatePath := filepath.Join(t.TempDir(), ".private_config.yaml")
+	privateData := map[string]config.DevicePrivateConf{
+		"device-1": {Owner: "alice", DashboardLocation: "上海"},
+	}
+	encoded, err := yaml.Marshal(privateData)
+	if err != nil {
+		t.Fatalf("marshal private fixture: %v", err)
+	}
+	if err := os.WriteFile(privatePath, encoded, 0o644); err != nil {
+		t.Fatalf("write private fixture: %v", err)
+	}
+
+	defaults := *config.Get()
+	defaults.Private = config.PrivateConfigConf{Enabled: true, Path: privatePath}
+	defaults.Plugins.GetWeather = config.GetWeatherConf{
+		APIKey:              "test-key",
+		DefaultLocation:     "深圳",
+		BaseURL:             srv.URL,
+		DashboardEnabled:    true,
+		PushIntervalSeconds: 1800,
+	}
+	restore := config.Replace(defaults)
+	defer restore()
+
+	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // hello
+	event := <-h.Recv(context.Background())
+	weather, ok := event.(*xiaozhiapi.ServerEventWeather)
+	if !ok {
+		t.Fatalf("expected weather event, got %T", event)
+	}
+	if weather.City != "上海市" {
+		t.Fatalf("city got %q want 上海市", weather.City)
+	}
+	if len(asked) == 0 || asked[0] != "上海" {
+		t.Fatalf("expected geocode for device override 上海, got %v", asked)
+	}
+}
+
+func TestSessionWeatherPushDisabledByDefault(t *testing.T) {
+	defaults := *config.Get()
+	defaults.Plugins.GetWeather = config.GetWeatherConf{
+		APIKey:          "test-key",
+		DefaultLocation: "深圳",
+		// DashboardEnabled 未开启
+	}
+	restore := config.Replace(defaults)
+	defer restore()
+
+	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // hello
+	select {
+	case event := <-h.Recv(context.Background()):
+		if _, ok := event.(*xiaozhiapi.ServerEventWeather); ok {
+			t.Fatal("weather must not be pushed when dashboard_enabled is false")
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// notifySpeakHandler 返回一个 pipeline 使用 captureSegmentTTS 的 handler，
+// 便于断言 speakNotification 下发的 TTS 序列（不依赖真实模型）。
+func notifySpeakHandler(t *testing.T) *Handler {
+	t.Helper()
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // hello
+	h.pipeline = voice.NewPipeline(fakeASR{text: "x"}, &modeAwareLLM{}, captureSegmentTTS{})
+	return h
+}
+
+// drainEvents 收集事件直到超时（用于断言"应当不发生"的场景）。
+func drainEvents(h *Handler, timeout time.Duration) []any {
+	var events []any
+	deadline := time.After(timeout)
+	for {
+		select {
+		case event, ok := <-h.Recv(context.Background()):
+			if !ok {
+				return events
+			}
+			events = append(events, event)
+		case <-deadline:
+			return events
+		}
+	}
+}
+
+func ttsStates(events []any) []string {
+	var states []string
+	for _, e := range events {
+		if tts, ok := e.(*xiaozhiapi.ServerEventTTS); ok {
+			states = append(states, string(tts.State))
+		}
+	}
+	return states
+}
+
+func TestSpeakNotificationHighPriorityInterruptsCurrentSpeech(t *testing.T) {
+	h := notifySpeakHandler(t)
+	h.speaking.Store(true) // 模拟有语音在途
+	before := h.speechSeq.Load()
+
+	if err := h.PushNotification(context.Background(), &notify.Notification{
+		DeviceID: "dev-1", ID: "n-1", Content: "紧急：稍后开会。",
+		Priority: "high", Speak: true,
+	}); err != nil {
+		t.Fatalf("push notification: %v", err)
+	}
+
+	events := drainEvents(h, 500*time.Millisecond)
+	// 第一条必须是 notification 事件。
+	notif, ok := events[0].(*xiaozhiapi.ServerEventNotification)
+	if !ok {
+		t.Fatalf("first event must be notification, got %T", events[0])
+	}
+	if notif.ID != "n-1" || notif.Priority != xiaozhiapi.NotificationPriorityHigh || !notif.Speak {
+		t.Fatalf("unexpected notification: %+v", notif)
+	}
+
+	// high 优先级：先发 TTS Stop 打断，再播报内容。
+	states := ttsStates(events)
+	want := []string{"stop", "sentence_start", "sentence_end", "stop"}
+	if len(states) != len(want) {
+		t.Fatalf("tts states got %v want %v", states, want)
+	}
+	for i := range want {
+		if states[i] != want[i] {
+			t.Fatalf("tts states got %v want %v", states, want)
+		}
+	}
+	if h.speechSeq.Load() != before+1 {
+		t.Fatalf("high priority must bump speechSeq: got %d want %d", h.speechSeq.Load(), before+1)
+	}
+	// 播报文本来自 content。
+	var spoken string
+	for _, e := range events {
+		if tts, ok := e.(*xiaozhiapi.ServerEventTTS); ok && tts.State == xiaozhiapi.ServerTTSStateSentenceStart {
+			spoken = tts.Text
+		}
+	}
+	// TTS 前会裁掉首尾标点（不应把标点读出来），故断言无尾句号版本。
+	if spoken != "紧急：稍后开会" {
+		t.Fatalf("spoken text got %q", spoken)
+	}
+}
+
+func TestSpeakNotificationNormalWaitsForSpeechToFinish(t *testing.T) {
+	h := notifySpeakHandler(t)
+	h.speaking.Store(true)
+	before := h.speechSeq.Load()
+	// 第一次 sleep 时模拟"当前句子讲完了"。
+	var slept int
+	h.sleep = func(time.Duration) {
+		slept++
+		h.speaking.Store(false)
+	}
+
+	if err := h.PushNotification(context.Background(), &notify.Notification{
+		DeviceID: "dev-1", ID: "n-2", Content: "十五分钟后开会。",
+		Priority: "normal", Speak: true,
+	}); err != nil {
+		t.Fatalf("push notification: %v", err)
+	}
+
+	events := drainEvents(h, 500*time.Millisecond)
+	if slept == 0 {
+		t.Fatal("normal priority must wait for current speech to finish")
+	}
+	states := ttsStates(events)
+	// normal 不清空在途语音：没有前置 stop，只有一次完整播报 + 结尾 stop。
+	want := []string{"sentence_start", "sentence_end", "stop"}
+	if len(states) != len(want) {
+		t.Fatalf("tts states got %v want %v", states, want)
+	}
+	for i := range want {
+		if states[i] != want[i] {
+			t.Fatalf("tts states got %v want %v", states, want)
+		}
+	}
+	if h.speechSeq.Load() != before {
+		t.Fatalf("normal priority must not interrupt: speechSeq got %d want %d", h.speechSeq.Load(), before)
+	}
+}
+
+func TestSpeakNotificationDroppedWhenSpeechNeverEnds(t *testing.T) {
+	h := notifySpeakHandler(t)
+	h.speaking.Store(true) // 一直讲不完
+	now := time.Unix(1793334000, 0)
+	h.now = func() time.Time { return now }
+	h.sleep = func(d time.Duration) { now = now.Add(d) } // 推进虚拟时钟，避免真等 10s
+
+	if err := h.PushNotification(context.Background(), &notify.Notification{
+		DeviceID: "dev-1", ID: "n-3", Content: "稍后开会。",
+		Priority: "low", Speak: true,
+	}); err != nil {
+		t.Fatalf("push notification: %v", err)
+	}
+
+	events := drainEvents(h, 500*time.Millisecond)
+	// 只上屏、不播报：不应出现任何 TTS 事件。
+	if states := ttsStates(events); len(states) != 0 {
+		t.Fatalf("timed-out speech must be dropped, got tts states %v", states)
+	}
+	// 上屏事件仍在。
+	if _, ok := events[0].(*xiaozhiapi.ServerEventNotification); !ok {
+		t.Fatalf("notification must still be displayed, got %T", events[0])
+	}
+}
+
+func TestPushNotificationWithoutSpeakDoesNotSynthesize(t *testing.T) {
+	h := notifySpeakHandler(t)
+	if err := h.PushNotification(context.Background(), &notify.Notification{
+		DeviceID: "dev-1", ID: "n-4", Content: "静默上屏。", Speak: false,
+	}); err != nil {
+		t.Fatalf("push notification: %v", err)
+	}
+	events := drainEvents(h, 500*time.Millisecond)
+	if states := ttsStates(events); len(states) != 0 {
+		t.Fatalf("speak=false must not emit tts, got %v", states)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected exactly one notification event, got %d", len(events))
+	}
 }

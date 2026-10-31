@@ -30,6 +30,7 @@ import (
 	"github.com/xdimtech/go-xiaozhi/service/mcp"
 	"github.com/xdimtech/go-xiaozhi/service/memory"
 	"github.com/xdimtech/go-xiaozhi/service/news"
+	"github.com/xdimtech/go-xiaozhi/service/notify"
 	"github.com/xdimtech/go-xiaozhi/service/search"
 	"github.com/xdimtech/go-xiaozhi/service/sessionaudio"
 	"github.com/xdimtech/go-xiaozhi/service/voice"
@@ -80,6 +81,10 @@ type Handler struct {
 	sleep          func(time.Duration)
 	now            func() time.Time
 	testAfterWrite func(any)
+
+	// notifyAckSink 接收设备对 notification 的回执，由 P2 的 notify 服务注入
+	// （在 P2 之前为 nil，仅记日志）。
+	notifyAckSink func(ctx context.Context, ack *xiaozhiapi.ClientEventNotificationAck)
 }
 
 func NewHandler(ctx context.Context, client ClientInfo) *Handler {
@@ -153,6 +158,7 @@ func NewHandlerWithMemory(ctx context.Context, client ClientInfo, mem memory.Sto
 	_ = h.mcpManager.Initialize(ctx)
 	log.Printf("session started session_id=%s remote_ip=%s device_id=%s asr=%s llm=%s tts=%s vad=%s", h.sessionID, h.client.RemoteIP, h.client.DeviceID, runtime.ASR.Type, runtime.LLM.Type, runtime.TTS.Type, runtime.Session.VAD.Type)
 	_ = h.write(h.helloEvent())
+	h.startWeatherPusher()
 	return h, nil
 }
 
@@ -221,6 +227,8 @@ func (h *Handler) DispatchClientEvent(ctx context.Context, event any) (error, bo
 		return h.handleAbort(ctx, e), false
 	case *xiaozhiapi.ClientEventIot:
 		return h.handleIot(ctx, e), false
+	case *xiaozhiapi.ClientEventNotificationAck:
+		return h.handleNotificationAck(ctx, e), false
 	default:
 		return nil, false
 	}
@@ -359,6 +367,111 @@ func (h *Handler) handleIot(ctx context.Context, event *xiaozhiapi.ClientEventIo
 	}
 	h.iotRegistry.UpdateStates(event.States)
 	return nil
+}
+
+// handleNotificationAck 处理设备对 notification 的回执（见 docs 方案 §7.4）。
+// 回执本身不改变本会话状态，交给 notify 服务（P2）记账；notify 未接入时仅记日志。
+func (h *Handler) handleNotificationAck(ctx context.Context, event *xiaozhiapi.ClientEventNotificationAck) error {
+	log.Printf("notification ack session_id=%s id=%s action=%s timestamp=%d", h.sessionID, event.ID, event.Action, event.Timestamp)
+	if h.notifyAckSink != nil {
+		h.notifyAckSink(ctx, event)
+	}
+	return nil
+}
+
+// SetAckSink 实现 notify.Device：注入设备回执回调（由 notify.Service 调用）。
+func (h *Handler) SetAckSink(fn func(ctx context.Context, ack *xiaozhiapi.ClientEventNotificationAck)) {
+	h.notifyAckSink = fn
+}
+
+// PushNotification 实现 notify.Device：把一条通知经现有写队列下发给设备，
+// 并在 Speak 为真时按约定的打断/等待策略播报（见 docs 方案 §7.2/§8.2）。
+// 写入统一走 writeQ（禁止并发直写 WebSocket）。
+func (h *Handler) PushNotification(ctx context.Context, n *notify.Notification) error {
+	ev := &xiaozhiapi.ServerEventNotification{
+		ServerEventBase: xiaozhiapi.ServerEventBase{
+			Type:      xiaozhiapi.ServerEventTypeNotification,
+			SessionId: h.sessionID,
+		},
+		ID:             n.ID,
+		Category:       xiaozhiapi.NotificationCategory(n.Category),
+		Title:          n.Title,
+		Content:        n.Content,
+		TriggerAt:      n.TriggerAt,
+		Priority:       xiaozhiapi.NotificationPriority(n.Priority),
+		Speak:          n.Speak,
+		DisplaySeconds: n.DisplaySeconds,
+	}
+	if err := h.write(ev); err != nil {
+		return err
+	}
+	if n.Speak && n.Content != "" {
+		go h.speakNotification(ctx, n)
+	}
+	return nil
+}
+
+// PushWeather 查询并下发一条结构化天气快照（docs 方案 §7.3）。
+// 城市取设备级覆盖 dashboard_location，否则用 plugins.get_weather.default_location。
+func (h *Handler) PushWeather(ctx context.Context) error {
+	if h.weatherClient == nil {
+		return nil
+	}
+	city := strings.TrimSpace(h.runtime.Device.DashboardLocation)
+	if city == "" {
+		city = strings.TrimSpace(h.runtime.Plugins.GetWeather.DefaultLocation)
+	}
+	if city == "" {
+		city = "广州"
+	}
+	snap, err := h.weatherClient.QuerySnapshot(ctx, city)
+	if err != nil {
+		return err
+	}
+	return h.write(&xiaozhiapi.ServerEventWeather{
+		ServerEventBase: xiaozhiapi.ServerEventBase{
+			Type:      xiaozhiapi.ServerEventTypeWeather,
+			SessionId: h.sessionID,
+		},
+		City:        snap.City,
+		Weather:     snap.Weather,
+		Temperature: snap.Temperature,
+		FeelsLike:   snap.FeelsLike,
+		Humidity:    snap.Humidity,
+		Wind:        snap.Wind,
+		ReportTime:  snap.ReportTime,
+	})
+}
+
+// startWeatherPusher 启动会话级天气推送：连接建立后立即推一次，之后按
+// push_interval_seconds（默认 1800s）周期推送。生命周期绑定 h.ctx。
+// 未启用（dashboard_enabled=false）时什么都不做。
+func (h *Handler) startWeatherPusher() {
+	conf := h.runtime.Plugins.GetWeather
+	if !conf.DashboardEnabled {
+		return
+	}
+	interval := time.Duration(conf.PushIntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	go func() {
+		if err := h.PushWeather(h.ctx); err != nil {
+			log.Printf("weather push failed session_id=%s error=%v", h.sessionID, err)
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-h.ctx.Done():
+				return
+			case <-ticker.C:
+				if err := h.PushWeather(h.ctx); err != nil {
+					log.Printf("weather push failed session_id=%s error=%v", h.sessionID, err)
+				}
+			}
+		}
+	}()
 }
 
 func (h *Handler) IotTools() []iot.Tool {
@@ -1938,6 +2051,55 @@ func (h *Handler) sendSpeechResponse(segments []voice.SpeechSegment, speechSeq u
 	return nil
 }
 
+// speakNotification 在后台 goroutine 里播报通知内容（PushNotification 调用）。
+// 打断/等待策略（docs 方案 §7.2 约定）：
+//   - high：立即打断当前语音（递增 speechSeq + 发 TTS Stop），然后播报；
+//   - normal/low：等待当前句子讲完（最多 10s），超时则放弃语音、仅保留上屏显示。
+//
+// 播报复用 pipeline.SynthesizeText + sendSpeechResponse，与聊天共享
+// speaking 标志与 speechSeq，因此不会与在途语音交错。
+func (h *Handler) speakNotification(ctx context.Context, n *notify.Notification) {
+	if h.closed.Load() || h.pipeline == nil {
+		return
+	}
+
+	if h.speaking.Load() {
+		if xiaozhiapi.NotificationPriority(n.Priority) != xiaozhiapi.NotificationPriorityHigh {
+			// normal/low：等待当前语音结束，最多 10s。
+			deadline := h.now().Add(10 * time.Second)
+			for h.speaking.Load() && h.now().Before(deadline) {
+				h.sleep(20 * time.Millisecond)
+			}
+			if h.speaking.Load() {
+				// 超时：放弃语音，仅保留上屏显示。
+				log.Printf("notification speak dropped session_id=%s id=%s reason=speech timeout", h.sessionID, n.ID)
+				return
+			}
+		} else {
+			// high：立即打断当前语音。
+			log.Printf("notification high-priority interrupt session_id=%s id=%s", h.sessionID, n.ID)
+			h.abortCurrentSpeech()
+		}
+	}
+
+	if h.closed.Load() {
+		return
+	}
+	speechSeq := h.speechSeq.Load()
+	h.speaking.Store(true)
+	defer h.speaking.Store(false)
+
+	segment, err := h.pipeline.SynthesizeText(ctx, h.sessionID, n.Content)
+	if err != nil {
+		log.Printf("notification tts failed session_id=%s id=%s error=%v", h.sessionID, n.ID, err)
+		return
+	}
+	if segment.Text == "" {
+		return
+	}
+	_ = h.sendSpeechResponse([]voice.SpeechSegment{segment}, speechSeq)
+}
+
 func (h *Handler) sendStopNotify() error {
 	conf := h.runtime.TTS.StopNotify
 	if !conf.Enabled {
@@ -2251,6 +2413,10 @@ func (h *Handler) helloEvent() *xiaozhiapi.ServerEventHello {
 		Channels:      config.Xiaozhi().Channels,
 		FrameDuration: config.Xiaozhi().FrameDuration,
 	}
+	now := h.now
+	if now == nil {
+		now = time.Now
+	}
 
 	return &xiaozhiapi.ServerEventHello{
 		ServerEventBase: xiaozhiapi.ServerEventBase{
@@ -2260,6 +2426,7 @@ func (h *Handler) helloEvent() *xiaozhiapi.ServerEventHello {
 		Version:     version,
 		Transport:   config.Xiaozhi().Transport,
 		AudioParams: params,
+		ServerTime:  now().Unix(),
 	}
 }
 

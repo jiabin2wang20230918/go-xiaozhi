@@ -83,6 +83,11 @@ func (w *ConnWrapper) Pong(data string) error {
 	return w.conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
 }
 
+// Handler 暴露底层会话，供 notify 等外围服务绑定设备生命周期。
+func (w *ConnWrapper) Handler() *Handler {
+	return w.handler
+}
+
 func (w *ConnWrapper) Close() error {
 	if w.conn != nil {
 		_ = w.conn.Close()

@@ -7,11 +7,31 @@ import (
 type ServerEventType string
 
 const (
-	ServerEventTypeHello ServerEventType = "hello"
-	ServerEventTypeSTT   ServerEventType = "stt"
-	ServerEventTypeLLM   ServerEventType = "llm"
-	ServerEventTypeTTS   ServerEventType = "tts"
-	ServerEventTypeIot   ServerEventType = "iot"
+	ServerEventTypeHello        ServerEventType = "hello"
+	ServerEventTypeSTT          ServerEventType = "stt"
+	ServerEventTypeLLM          ServerEventType = "llm"
+	ServerEventTypeTTS          ServerEventType = "tts"
+	ServerEventTypeIot          ServerEventType = "iot"
+	ServerEventTypeNotification ServerEventType = "notification"
+	ServerEventTypeWeather      ServerEventType = "weather"
+)
+
+// NotificationCategory 通知类别（见 docs 方案 §7.2）。
+type NotificationCategory string
+
+const (
+	NotificationCategoryReminder     NotificationCategory = "reminder"
+	NotificationCategoryWeatherAlert NotificationCategory = "weather_alert"
+	NotificationCategorySystem       NotificationCategory = "system"
+)
+
+// NotificationPriority 通知优先级。
+type NotificationPriority string
+
+const (
+	NotificationPriorityLow    NotificationPriority = "low"
+	NotificationPriorityNormal NotificationPriority = "normal"
+	NotificationPriorityHigh   NotificationPriority = "high"
 )
 
 type ServerTTSState string
@@ -37,6 +57,8 @@ type ServerEventHello struct {
 	Version     int         `json:"version"`
 	Transport   string      `json:"transport"`
 	AudioParams AudioParams `json:"audio_params"`
+	// ServerTime 服务端当前时间（epoch 秒），供设备校准本地时钟；0 表示不携带。
+	ServerTime int64 `json:"server_time,omitempty"`
 }
 
 func (e *ServerEventHello) GetType() ServerEventType {
@@ -102,6 +124,44 @@ func (e *ServerEventIot) GetType() ServerEventType {
 	return ServerEventTypeIot
 }
 
+// ServerEventNotification 是服务端主动下发的通知/提醒（Grok Bot 经 /v1/notify 触发）。
+// 提醒的 SoR 与调度在 Grok Bot，本事件只是投递载荷（见 docs 方案 §7.2）。
+type ServerEventNotification struct {
+	ServerEventBase
+	ID             string               `json:"id"`
+	Category       NotificationCategory `json:"category"`
+	Title          string               `json:"title,omitempty"`
+	Content        string               `json:"content"`
+	TriggerAt      int64                `json:"trigger_at,omitempty"`
+	Priority       NotificationPriority `json:"priority,omitempty"`
+	Speak          bool                 `json:"speak"`
+	DisplaySeconds int                  `json:"display_seconds,omitempty"`
+}
+
+func (e *ServerEventNotification) GetType() ServerEventType {
+	return ServerEventTypeNotification
+}
+
+// {'type': 'notification', 'session_id': '...', 'id': 'reminder-20261030-1500', 'category': 'reminder', 'title': '项目会议', 'content': '15分钟后开始项目会议。', 'trigger_at': 1793334000, 'priority': 'normal', 'speak': true, 'display_seconds': 15}
+
+// ServerEventWeather 是服务端下发的结构化天气快照（Dashboard 用）。
+type ServerEventWeather struct {
+	ServerEventBase
+	City        string `json:"city"`
+	Weather     string `json:"weather"`
+	Temperature int    `json:"temperature"`
+	FeelsLike   int    `json:"feels_like,omitempty"`
+	Humidity    int    `json:"humidity,omitempty"`
+	Wind        string `json:"wind,omitempty"`
+	ReportTime  string `json:"report_time,omitempty"`
+}
+
+func (e *ServerEventWeather) GetType() ServerEventType {
+	return ServerEventTypeWeather
+}
+
+// {'type': 'weather', 'session_id': '...', 'city': '深圳', 'weather': '多云', 'temperature': 24, 'feels_like': 25, 'humidity': 68, 'wind': '东北风 2级', 'report_time': '2026-10-30T14:30:00+08:00'}
+
 func unmarshalServerEvent[T ServerEventInterface](data []byte) (*T, error) {
 	var t T
 	err := json.Unmarshal(data, &t)
@@ -127,6 +187,10 @@ func IsServerEvent(event any) (ServerEvent, bool) {
 		return event.(*ServerEventTTS), true
 	case ServerEventTypeIot:
 		return event.(*ServerEventIot), true
+	case ServerEventTypeNotification:
+		return event.(*ServerEventNotification), true
+	case ServerEventTypeWeather:
+		return event.(*ServerEventWeather), true
 	default:
 		return nil, false
 	}

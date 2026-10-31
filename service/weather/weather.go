@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xdimtech/go-xiaozhi/pkg/config"
@@ -18,6 +19,9 @@ const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 type Client struct {
 	Config     config.GetWeatherConf
 	HTTPClient *http.Client
+
+	cacheMu sync.Mutex
+	cache   map[string]*snapshotEntry
 }
 
 type City struct {
@@ -105,6 +109,13 @@ func cityName(value any) string {
 }
 
 func (c *Client) fetchWeather(ctx context.Context, conf config.GetWeatherConf, adcode string) (weatherResponse, error) {
+	return c.fetchWeatherWithExtensions(ctx, conf, adcode, "all")
+}
+
+// fetchWeatherWithExtensions 按需选择 extensions：
+//   - "base"：返回 lives（实时天气）；
+//   - "all"：返回 forecasts（多日预报）。高德对 "all" 不返回 lives。
+func (c *Client) fetchWeatherWithExtensions(ctx context.Context, conf config.GetWeatherConf, adcode, extensions string) (weatherResponse, error) {
 	endpoint, err := url.JoinPath(conf.BaseURL, "/v3/weather/weatherInfo")
 	if err != nil {
 		return weatherResponse{}, err
@@ -112,7 +123,7 @@ func (c *Client) fetchWeather(ctx context.Context, conf config.GetWeatherConf, a
 	values := url.Values{}
 	values.Set("city", adcode)
 	values.Set("key", conf.APIKey)
-	values.Set("extensions", "all")
+	values.Set("extensions", extensions)
 	body, err := c.getJSON(ctx, endpoint+"?"+values.Encode())
 	if err != nil {
 		return weatherResponse{}, fmt.Errorf("网络错误: %s", err)
@@ -124,7 +135,9 @@ func (c *Client) fetchWeather(ctx context.Context, conf config.GetWeatherConf, a
 	if response.Status != "1" {
 		return weatherResponse{}, fmt.Errorf("天气API错误: %s", response.Info)
 	}
-	if len(response.Lives) == 0 && len(response.Forecasts) == 0 {
+	// extensions=base 时高德只返回 lives；该时段无实时数据时 lives 为空，
+	// 这属于"可回退"情况，不算结构错误（由调用方决定是否退回预报）。
+	if extensions != "base" && len(response.Lives) == 0 && len(response.Forecasts) == 0 {
 		return weatherResponse{}, fmt.Errorf("天气API返回的数据结构不正确")
 	}
 	return response, nil
@@ -172,7 +185,10 @@ type liveWeather struct {
 }
 
 type forecastGroup struct {
-	Casts []forecastWeather `json:"casts"`
+	City       string            `json:"city"`
+	Adcode     string            `json:"adcode"`
+	ReportTime string            `json:"reporttime"`
+	Casts      []forecastWeather `json:"casts"`
 }
 
 type forecastWeather struct {

@@ -16,6 +16,17 @@ server:
       - token: "your-token2"
         name: "your-device-name2"
     allowed_devices: []
+  # 通知投递通道（POST /v1/notify）：Grok Bot 到点调用，本服务只做投递，
+  # 不存提醒日历/不做 cron（见 docs/esp32-s3-box-3-dashboard-and-grok-reminder-plan.md §8.2）。
+  # 鉴权复用上面 server.auth（Bearer token 或 allowed_devices）。
+  notify:
+    enabled: false
+    # 短期投递状态（pending + 回执），相对路径按仓库根目录解析。
+    state_path: "data/notify_state.json"
+    # 设备离线时待投递保留时长；重连后补发，已回执的不再重播。
+    pending_ttl: "24h"
+    # 回执记录保留时长（供 GET /v1/devices/{id}/notify/{notify_id} 查询）。
+    acked_ttl: "168h"
 
 session:
   min_frames: 15
@@ -129,6 +140,11 @@ plugins:
     api_key: "你的高德地图 api key"
     default_location: "深圳"
     base_url: "https://restapi.amap.com"
+    # 向设备 Dashboard 主动推送结构化天气快照（weather 服务端事件）。
+    # 城市优先取设备私有配置的 dashboard_location，其次用上面的 default_location。
+    dashboard_enabled: false
+    # 推送间隔（秒），默认 1800（30 分钟）；服务端按城市缓存同样时长。
+    push_interval_seconds: 1800
   baidu_search:
     enabled: false
     search_url: "https://www.baidu.com/s"

@@ -162,6 +162,12 @@ notification
 weather
 ```
 
+`hello` 事件新增可选字段 `server_time`（**epoch 秒**，UTC），供设备校准本地时钟；缺省（0）时不携带该字段，旧固件不受影响。
+
+```json
+{"type": "hello", "version": 1, "transport": "websocket", "audio_params": {}, "session_id": "...", "server_time": 1793334000}
+```
+
 ### 7.2 `notification` 服务端事件
 
 ```json
@@ -186,6 +192,15 @@ weather
 - `priority`：`low`、`normal`、`high`。
 - `speak`：是否走 TTS（与聊天抢麦时的打断策略见风险节；v1 需定一条简单规则）。
 - `display_seconds`：默认显示时长。
+
+v1 已定稿的播报规则（服务端实现见 §15.4）：
+
+| `priority` | 若当前正有语音在播 |
+| --- | --- |
+| `high` | 立即打断（发 TTS `stop` 清空设备缓冲），随后播报 |
+| `normal` / `low` | 等当前句结束，最长等 10s；超时则**放弃语音**，仅保留上屏显示 |
+
+`speak: false` 时只上屏、不合成 TTS。无论是否播报，`notification` 事件本身总会先下发。
 
 ### 7.3 `weather` 服务端事件
 
@@ -269,15 +284,16 @@ v1 **主路径**是用户对 Grok Bot 说，或在 Bot 里配 routine。
 ## 9. 服务端改造清单
 
 ```text
-pkg/protocol/xiaozhi/server_event.go   # notification / weather
+pkg/protocol/xiaozhi/server_event.go   # notification / weather / hello.server_time
 pkg/protocol/xiaozhi/client_event.go   # notification_ack
-handler/local/session.go               # 主动写队列推送
-handler/local/conn.go
-service/weather/weather.go             # QuerySnapshot + cache
-service/notify/                        # HTTP notify + 短期 pending/幂等
+handler/local/session.go               # 主动写队列推送 + 播报策略 + 天气推送器
+handler/local/conn.go                  # Handler() 暴露会话（notify 绑定用）
+handler/notify_http.go                 # POST /v1/notify、GET /v1/devices/.../notify/...
+service/weather/weather.go             # QuerySnapshot + 30 分钟按城市缓存
+service/notify/                        # 在线注册表 + 短期 pending/回执状态
 ```
 
-主要任务：
+主要任务（**均已完成**，细节见 §15）：
 
 1. 增加 `notification`、`weather`、`notification_ack` 协议结构与测试。
 2. session 支持服务端主动写消息（复用写队列）。
@@ -349,8 +365,8 @@ main/services/reminder_service.cc
 - 密钥不进 ESP32；notify API 必须鉴权，仅信任持有 token 的调用方。
 - 主动推送必须走现有写队列。
 - 设备离线：短期 pending 即可；长期日历在 Grok Bot。
-- `speak: true` 与聊天 TTS 的优先级 / 打断策略 v1 需写死一条（例如：high 可打断，normal 等当前句结束）。
-- 时间统一用带时区的时间戳；Bot 与小智约定 UTC 或明确 offset。
+- `speak: true` 与聊天 TTS 的优先级 / 打断策略 v1 已写死：high 可打断，normal/low 等当前句结束（最长 10s，超时只上屏不播报），见 §7.2 与 §15.4。
+- 时间约定：`hello.server_time`、`notification.trigger_at`、`notification_ack.timestamp` 统一用 **epoch 秒**（UTC）；`weather.report_time` 保留供应商原始字符串（含本地时间）。
 - 勿将「Grok Bot」与「llm.base_url 上的 OpenAI 兼容模型」混为一谈。
 
 ## 13. 第一版建议范围
@@ -373,3 +389,141 @@ main/services/reminder_service.cc
 - 同一 `id` 不重复播报已确认提醒；重连补发行为符合预期。
 - 文档与实现一致：**提醒不落在 go-xiaozhi 作 SoR**。
 - 相关 Go 协议 / notify 与固件新增逻辑有针对性测试。
+
+## 15. 服务端实施说明（go-xiaozhi，已落地）
+
+本节记录实际实现的接口契约，供 Grok Bot 与固件对齐；与上文出现冲突时以本节为准。
+
+### 15.1 HTTP 接口
+
+服务端在**同一个端口**、与 `/xiaozhi/v1/` 同一个 mux 上挂载：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/v1/notify` | 投递一条通知（幂等 `id`） |
+| `GET` | `/v1/devices/{device_id}/notify/{notify_id}` | 查询投递/回执状态 |
+
+鉴权复用 `server.auth`：`Authorization: Bearer <token>`（token 取自 `server.auth.tokens`），或命中 `server.auth.allowed_devices` 时免 token。`server.auth.enabled=false` 时接口开放（仅适合内网调试）。
+
+请求体（与 §8.2 一致）：
+
+```json
+{
+  "device_id": "aa:bb:cc:dd:ee:ff",
+  "id": "reminder-20261030-1500",
+  "category": "reminder",
+  "title": "项目会议",
+  "content": "15分钟后开始项目会议。",
+  "trigger_at": 1793334000,
+  "priority": "normal",
+  "speak": true,
+  "display_seconds": 15
+}
+```
+
+响应：
+
+```json
+{"state": "delivered"}
+```
+
+| `state` | 含义 | HTTP |
+| --- | --- | --- |
+| `delivered` | 设备在线，已下发并等待回执 | 200 |
+| `pending` | 设备离线（或下发失败），已入库等待重连补发 | 200 |
+| `acked` | 该 `id` 已回执，按幂等语义**不再推送** | 200 |
+| — | 参数错误（缺 `id` / `device_id`） | 400 |
+| — | 鉴权失败 | 401 |
+| — | `server.notify.enabled=false` | 503 |
+| — | 其他内部错误 | 500（`pending` 场景仍返回 200） |
+
+状态查询响应：
+
+```json
+{"id": "reminder-20261030-1500", "state": "acked", "action": "ack", "at": 1793334005, "attempts": 1}
+```
+
+`state` 取值：`pending`、`delivered`、`acked`；无记录返回 404 + `{"state": "not_found"}`。
+
+### 15.2 短期状态与持久化
+
+- `server.notify.state_path`（默认 `data/notify_state.json`）保存 `pending` 与 `acked` 两部分：
+
+```json
+{
+  "pending": {
+    "aa:bb:cc:dd:ee:ff": [
+      {"device_id": "...", "id": "...", "content": "...", "speak": true,
+       "queued_at": 1793334000, "expires_at": 1793420400, "delivered": true, "attempts": 1}
+    ]
+  },
+  "acked": {
+    "reminder-20261030-1500": {"device_id": "...", "action": "ack", "timestamp": 1793334005, "at": 1793334005}
+  }
+}
+```
+
+- `pending` 超过 `pending_ttl`（默认 `24h`）自动清理，不再补发；`acked` 超过 `acked_ttl`（默认 `168h` = 7d）清理，之后同 `id` 可再次投递。
+- 写入为**原子替换**（临时文件 + rename），进程重启后状态继续有效；`state_path` 所在目录必须对服务进程可写（否则只保留内存态并打日志告警）。
+- **仍然是短期投递状态，不是提醒日历**：提醒的正文、重复规则、下次触发时间都在 Grok Bot。
+
+### 15.3 连接生命周期与补发
+
+1. 设备 WebSocket 连接建立 → `BindSession(device_id, session)`：登记在线会话（last-writer-wins）、注入回执回调、立即补发该设备全部未过期且未回执的 `pending`。
+2. 会话结束 → `UnbindSession`：仅当注册的还是本会话时才移除，避免旧连接延迟断开误删新连接。
+3. 重连补发按 `id` 幂等：设备侧应做去重，已 `ack` 的 `id` 服务端不再下发。
+
+### 15.4 TTS 播报
+
+- 复用会话既有 `pipeline.SynthesizeText` + `sendSpeechResponse`，仍走唯一写队列（不并发直写 WebSocket）。
+- `high`：递增 `speechSeq` 中止在途语音并发 TTS `stop`，随后播报。
+- `normal` / `low`：轮询等待当前语音结束，上限 10s；超时放弃语音、仅保留上屏。
+- 播报前会裁掉首尾标点（避免把句号读出来）。
+
+### 15.5 天气推送
+
+- 事件结构见 §7.3；数值字段为整数（`temperature` / `feels_like` / `humidity`），`wind` 形如 `东北风 2级`。
+- 高德实现细节：实时天气必须用 `extensions=base`（`extensions=all` 只返回多日预报）；实时数据缺失时自动回落当日预报（此时 `humidity` / `feels_like` 缺省）。
+- `feels_like`：高德实时接口不提供体感温度，当前通常缺省（字段 `omitempty`），固件需容忍缺省值。
+- 城市解析顺序：设备私有配置 `dashboard_location` → `plugins.get_weather.default_location` → `广州`。
+- 触发时机：会话建立后立即推一次，之后按 `plugins.get_weather.push_interval_seconds`（默认 1800s）周期推送；生命周期绑定会话 context，断连即停。
+- 按城市缓存 30 分钟，多设备共享同一缓存，避免打满供应商配额。
+- 开关：`plugins.get_weather.dashboard_enabled`（默认 `false`，需显式开启）。
+
+### 15.6 配置片段
+
+```yaml
+server:
+  notify:
+    enabled: true
+    state_path: "data/notify_state.json"
+    pending_ttl: "24h"
+    acked_ttl: "168h"
+
+plugins:
+  get_weather:
+    dashboard_enabled: true
+    push_interval_seconds: 1800
+
+private_config:            # 设备级城市覆盖（可选字段）
+  enabled: true
+  path: data/.private_config.yaml
+# 设备条目内：
+#   "aa:bb:cc:dd:ee:ff":
+#     owner: alice
+#     dashboard_location: "上海"
+```
+
+### 15.7 snooze 回路（v1）
+
+设备回执 `notification_ack`（`action`: `shown`/`ack`/`snooze`/`dismiss`/`failed`）→ 服务端记录到 `acked` → Grok Bot 轮询 `GET /v1/devices/{id}/notify/{notify_id}` 读到 `action` 后自行改写下次触发时间并重新 `POST /v1/notify`（**新的 `id`**）。v1 不做服务端反向回调 Bot。
+
+> 注意：同一 `id` 在 `acked_ttl` 内不会再次推送，因此 snooze 重推必须使用新的 `id`（例如 `reminder-...-snooze1`）。
+
+### 15.8 测试覆盖
+
+- 协议：`pkg/protocol/xiaozhi/{server_event,client_event}_test.go`（字段序列化、未知类型回退、`IsServerEvent` 白名单）。
+- 投递：`service/notify/notify_test.go`（离线 pending、在线投递、ack 去重、重连补发、TTL、重启续存、新旧会话隔离）。
+- 接口与端到端：`handler/notify_e2e_test.go`（401/503、离线→上线补发、在线直投、`notification_ack` 转 acked、已 ack 不重发、重连补发）。
+- 播报：`handler/local/session_test.go`（high 打断、normal 等待、超时丢弃、`speak:false` 不合成）。
+- 天气：`service/weather/weather_test.go`（结构化快照、缓存命中、未知城市）、`handler/local/session_test.go`（连接即推、设备城市覆盖、开关关闭不推）。
