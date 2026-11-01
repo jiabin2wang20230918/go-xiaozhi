@@ -489,6 +489,7 @@ main/services/reminder_service.cc
 - 触发时机：会话建立后立即推一次，之后按 `plugins.get_weather.push_interval_seconds`（默认 1800s）周期推送；生命周期绑定会话 context，断连即停。
 - 按城市缓存 30 分钟，多设备共享同一缓存，避免打满供应商配额。
 - 开关：`plugins.get_weather.dashboard_enabled`（默认 `false`，需显式开启）。
+- 突变提醒（`category=weather_alert`）：与 Dashboard 共用同一会话轮询；在 `type: weather` 快照下发后做差分检测（实况降水、预报降水、显著降温）。开关 `plugins.get_weather.alert_enabled`（默认 `false`）；不走 HTTP `/v1/notify`，经会话 `PushNotification` 直推。同类提醒按 `(kind, 城市)` 冷却（默认 3h，可配 `alert_cooldown_seconds`）；降温阈值默认 5℃（`alert_cool_drop_c`）。
 
 ### 15.6 配置片段
 
@@ -504,6 +505,11 @@ plugins:
   get_weather:
     dashboard_enabled: true
     push_interval_seconds: 1800
+    alert_enabled: true
+    alert_cool_drop_c: 5
+    alert_cooldown_seconds: 10800
+    alert_speak: true
+    alert_display_seconds: 8
 
 private_config:            # 设备级城市覆盖（可选字段）
   enabled: true
@@ -526,4 +532,4 @@ private_config:            # 设备级城市覆盖（可选字段）
 - 投递：`service/notify/notify_test.go`（离线 pending、在线投递、ack 去重、重连补发、TTL、重启续存、新旧会话隔离）。
 - 接口与端到端：`handler/notify_e2e_test.go`（401/503、离线→上线补发、在线直投、`notification_ack` 转 acked、已 ack 不重发、重连补发）。
 - 播报：`handler/local/session_test.go`（high 打断、normal 等待、超时丢弃、`speak:false` 不合成）。
-- 天气：`service/weather/weather_test.go`（结构化快照、缓存命中、未知城市）、`handler/local/session_test.go`（连接即推、设备城市覆盖、开关关闭不推）。
+- 天气：`service/weather/weather_test.go`（结构化快照、缓存命中、未知城市）、`service/weather/alert_test.go`（突变检测与冷却）、`handler/local/session_test.go`（连接即推、设备城市覆盖、开关关闭不推、weather_alert 突变推送）。

@@ -145,6 +145,13 @@ plugins:
     dashboard_enabled: false
     # 推送间隔（秒），默认 1800（30 分钟）；服务端按城市缓存同样时长。
     push_interval_seconds: 1800
+    # 天气突变提醒（category=weather_alert），默认关闭；需 dashboard_enabled 开启后随轮询检测。
+    alert_enabled: false
+    alert_cool_drop_c: 5
+    alert_cooldown_seconds: 10800
+    alert_speak: true
+    alert_display_seconds: 8
+    # alert_precip_keywords: ["雨", "雪", "雷"]
   baidu_search:
     enabled: false
     search_url: "https://www.baidu.com/s"
