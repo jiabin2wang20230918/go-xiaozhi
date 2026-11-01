@@ -424,11 +424,13 @@ func (h *Handler) PushWeather(ctx context.Context) error {
 	if city == "" {
 		city = "广州"
 	}
-	snap, err := h.weatherClient.QuerySnapshot(ctx, city)
+	weatherConf := h.runtime.Plugins.GetWeather
+	includeForecast := weatherConf.AlertEnabled
+	snap, alertSnap, err := h.weatherClient.QuerySnapshot(ctx, city, includeForecast)
 	if err != nil {
 		return err
 	}
-	return h.write(&xiaozhiapi.ServerEventWeather{
+	if err := h.write(&xiaozhiapi.ServerEventWeather{
 		ServerEventBase: xiaozhiapi.ServerEventBase{
 			Type:      xiaozhiapi.ServerEventTypeWeather,
 			SessionId: h.sessionID,
@@ -440,7 +442,32 @@ func (h *Handler) PushWeather(ctx context.Context) error {
 		Humidity:    snap.Humidity,
 		Wind:        snap.Wind,
 		ReportTime:  snap.ReportTime,
-	})
+	}); err != nil {
+		return err
+	}
+	if !weatherConf.AlertEnabled || alertSnap == nil {
+		return nil
+	}
+	now := time.Now()
+	if h.now != nil {
+		now = h.now()
+	}
+	alerts := h.weatherClient.EvaluateAlerts(city, alertSnap, weatherConf, now)
+	for _, a := range alerts {
+		n := &notify.Notification{
+			ID:             a.ID,
+			Category:       string(xiaozhiapi.NotificationCategoryWeatherAlert),
+			Title:          a.Title,
+			Content:        a.Content,
+			Priority:       "normal",
+			Speak:          a.Speak,
+			DisplaySeconds: a.DisplaySeconds,
+		}
+		if err := h.PushNotification(ctx, n); err != nil {
+			log.Printf("weather alert push failed session_id=%s id=%s error=%v", h.sessionID, a.ID, err)
+		}
+	}
+	return nil
 }
 
 // startWeatherPusher 启动会话级天气推送：连接建立后立即推一次，之后按

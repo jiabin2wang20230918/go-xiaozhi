@@ -306,6 +306,18 @@ type GetWeatherConf struct {
 	DashboardEnabled    bool `yaml:"dashboard_enabled"`
 	// PushIntervalSeconds 天气推送间隔（秒），默认 1800（30 分钟）。
 	PushIntervalSeconds int `yaml:"push_interval_seconds"`
+	// AlertEnabled 是否在 Dashboard 轮询时检测天气突变并推送 category=weather_alert。
+	AlertEnabled bool `yaml:"alert_enabled"`
+	// AlertCoolDropC 相对上次快照气温下降达到该值（℃）时触发降温提醒，默认 5。
+	AlertCoolDropC float64 `yaml:"alert_cool_drop_c"`
+	// AlertCooldownSeconds 同类突变提醒的最小间隔（秒），默认 10800（3 小时）。
+	AlertCooldownSeconds int `yaml:"alert_cooldown_seconds"`
+	// AlertSpeak 是否在突变提醒时 TTS 播报。
+	AlertSpeak bool `yaml:"alert_speak"`
+	// AlertDisplaySeconds 突变提醒上屏时长（秒），默认 8。
+	AlertDisplaySeconds int `yaml:"alert_display_seconds"`
+	// AlertPrecipKeywords 判定降水的关键词（匹配 live/forecast 文本子串），缺省用内置列表。
+	AlertPrecipKeywords []string `yaml:"alert_precip_keywords"`
 }
 
 type BaiduSearchConf struct {
