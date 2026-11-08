@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3752,6 +3753,82 @@ func TestSessionPushesWeatherOnConnect(t *testing.T) {
 	}
 	if weather.SessionId != h.sessionID {
 		t.Fatalf("weather session_id got %q want %q", weather.SessionId, h.sessionID)
+	}
+}
+
+func TestSessionWeatherAlertOnPrecipMutation(t *testing.T) {
+	var liveWeather atomic.Value
+	liveWeather.Store("多云")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v3/geocode/geo":
+			_, _ = fmt.Fprintf(w, `{"status":"1","geocodes":[{"city":%q,"adcode":%q}]}`, "深圳市", "440300")
+		case "/v3/weather/weatherInfo":
+			ext := r.URL.Query().Get("extensions")
+			if ext == "base" {
+				wth := liveWeather.Load().(string)
+				_, _ = fmt.Fprintf(w, `{"status":"1","lives":[{"weather":%q,"temperature":"24","humidity":"68","winddirection":"东北","windpower":"2","reporttime":"2026-10-30 14:30:00"}]}`, wth)
+				return
+			}
+			_, _ = w.Write([]byte(`{"status":"1","forecasts":[{"casts":[{"dayweather":"多云","nightweather":"多云"}]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	defaults := *config.Get()
+	defaults.Plugins.GetWeather = config.GetWeatherConf{
+		APIKey:              "test-key",
+		DefaultLocation:     "深圳",
+		BaseURL:             srv.URL,
+		DashboardEnabled:    true,
+		PushIntervalSeconds: 1800,
+		AlertEnabled:        true,
+		AlertSpeak:          false,
+	}
+	restore := config.Replace(defaults)
+	defer restore()
+
+	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	<-h.Recv(context.Background()) // hello
+	if _, ok := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventWeather); !ok {
+		t.Fatal("expected initial weather snapshot")
+	}
+
+	liveWeather.Store("小雨")
+	h.weatherClient.ClearSnapshotCache()
+	if err := h.PushWeather(context.Background()); err != nil {
+		t.Fatalf("second push: %v", err)
+	}
+	var note *xiaozhiapi.ServerEventNotification
+	for i := 0; i < 3; i++ {
+		select {
+		case event := <-h.Recv(context.Background()):
+			switch e := event.(type) {
+			case *xiaozhiapi.ServerEventNotification:
+				note = e
+			case *xiaozhiapi.ServerEventWeather:
+				if e.Weather != "小雨" {
+					t.Fatalf("second weather got %q", e.Weather)
+				}
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for weather alert notification")
+		}
+		if note != nil {
+			break
+		}
+	}
+	if note == nil {
+		t.Fatal("expected weather_alert notification")
+	}
+	if note.Category != xiaozhiapi.NotificationCategoryWeatherAlert {
+		t.Fatalf("category got %q", note.Category)
+	}
+	if note.Content == "" {
+		t.Fatal("expected alert content")
 	}
 }
 

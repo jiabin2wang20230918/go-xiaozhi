@@ -1884,3 +1884,11 @@ func TestGetWeatherConfPushIntervalDefault(t *testing.T) {
 		t.Fatalf("explicit push interval overwritten: %d", conf.PushIntervalSeconds)
 	}
 }
+
+func TestGetWeatherConfAlertDefaults(t *testing.T) {
+	conf := GetWeatherConf{}
+	conf.Normalize()
+	if conf.AlertEnabled {
+		t.Fatal("alert_enabled should default false")
+	}
+}

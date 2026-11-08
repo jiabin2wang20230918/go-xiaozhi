@@ -114,7 +114,7 @@ func TestQuerySnapshotReturnsStructuredLiveWeather(t *testing.T) {
 	client := New(config.GetWeatherConf{APIKey: "test-key", BaseURL: server.URL})
 	client.HTTPClient = server.Client()
 
-	snap, err := client.QuerySnapshot(context.Background(), "深圳")
+	snap, _, err := client.QuerySnapshot(context.Background(), "深圳", false)
 	if err != nil {
 		t.Fatalf("query snapshot: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestQuerySnapshotReturnsStructuredLiveWeather(t *testing.T) {
 	}
 
 	// 30 分钟缓存：重复查询不再命中 HTTP。
-	snap2, err := client.QuerySnapshot(context.Background(), "深圳")
+	snap2, _, err := client.QuerySnapshot(context.Background(), "深圳", false)
 	if err != nil {
 		t.Fatalf("cached query: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestQuerySnapshotReturnsStructuredLiveWeather(t *testing.T) {
 	}
 
 	// 不同城市走独立缓存。
-	if _, err := client.QuerySnapshot(context.Background(), "深圳"); err != nil {
+	if _, _, err := client.QuerySnapshot(context.Background(), "深圳", false); err != nil {
 		t.Fatalf("repeat query: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestQuerySnapshotUnknownLocation(t *testing.T) {
 
 	client := New(config.GetWeatherConf{APIKey: "test-key", BaseURL: server.URL})
 	client.HTTPClient = server.Client()
-	if _, err := client.QuerySnapshot(context.Background(), "不存在市"); err == nil {
+	if _, _, err := client.QuerySnapshot(context.Background(), "不存在市", false); err == nil {
 		t.Fatal("expected error for unknown location")
 	}
 }
@@ -196,7 +196,7 @@ func TestQuerySnapshotFallsBackToForecastWhenLiveUnavailable(t *testing.T) {
 	client := New(config.GetWeatherConf{APIKey: "test-key", BaseURL: server.URL})
 	client.HTTPClient = server.Client()
 
-	snap, err := client.QuerySnapshot(context.Background(), "深圳")
+	snap, _, err := client.QuerySnapshot(context.Background(), "深圳", false)
 	if err != nil {
 		t.Fatalf("query snapshot: %v", err)
 	}

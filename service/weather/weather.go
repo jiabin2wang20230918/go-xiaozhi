@@ -22,6 +22,9 @@ type Client struct {
 
 	cacheMu sync.Mutex
 	cache   map[string]*snapshotEntry
+
+	alertMu    sync.Mutex
+	alertState map[string]*alertStateEntry
 }
 
 type City struct {
