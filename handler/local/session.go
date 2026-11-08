@@ -2322,14 +2322,14 @@ func (h *Handler) sendSpeechSegment(segment voice.SpeechSegment, speechSeq uint6
 	if h.isSpeechCanceled(speechSeq) {
 		return nil
 	}
-	if err := h.write(&xiaozhiapi.ServerEventTTS{
+	if err := h.writeSpeech(&xiaozhiapi.ServerEventTTS{
 		ServerEventBase: xiaozhiapi.ServerEventBase{
 			Type:      xiaozhiapi.ServerEventTypeTTS,
 			SessionId: h.sessionID,
 		},
 		State: xiaozhiapi.ServerTTSStateSentenceStart,
 		Text:  segment.Text,
-	}); err != nil {
+	}, speechSeq); err != nil {
 		return err
 	}
 	for _, frame := range segment.Audio {
@@ -2337,20 +2337,23 @@ func (h *Handler) sendSpeechSegment(segment voice.SpeechSegment, speechSeq uint6
 			continue
 		}
 		if h.isSpeechCanceled(speechSeq) {
-			break
+			return nil
 		}
-		if err := h.write(append([]byte(nil), frame...)); err != nil {
+		if err := h.writeSpeech(append([]byte(nil), frame...), speechSeq); err != nil {
 			return err
 		}
 	}
-	return h.write(&xiaozhiapi.ServerEventTTS{
+	if h.isSpeechCanceled(speechSeq) {
+		return nil
+	}
+	return h.writeSpeech(&xiaozhiapi.ServerEventTTS{
 		ServerEventBase: xiaozhiapi.ServerEventBase{
 			Type:      xiaozhiapi.ServerEventTypeTTS,
 			SessionId: h.sessionID,
 		},
 		State: xiaozhiapi.ServerTTSStateSentenceEnd,
 		Text:  segment.Text,
-	})
+	}, speechSeq)
 }
 
 func (h *Handler) isSpeechCanceled(speechSeq uint64) bool {
@@ -2431,6 +2434,14 @@ func (h *Handler) helloEvent() *xiaozhiapi.ServerEventHello {
 }
 
 func (h *Handler) write(event any) (err error) {
+	return h.enqueueWrite(writeSeqUnscoped, event)
+}
+
+func (h *Handler) writeSpeech(event any, speechSeq uint64) (err error) {
+	return h.enqueueWrite(speechSeq, event)
+}
+
+func (h *Handler) enqueueWrite(speechSeq uint64, event any) (err error) {
 	if h.closed.Load() {
 		return errors.New("local handler closed")
 	}
@@ -2439,8 +2450,9 @@ func (h *Handler) write(event any) (err error) {
 			err = errors.New("local handler closed")
 		}
 	}()
+	item := queuedWrite{speechSeq: speechSeq, payload: event}
 	select {
-	case h.writeQ <- event:
+	case h.writeQ <- item:
 		if h.testAfterWrite != nil {
 			h.testAfterWrite(event)
 		}

@@ -27,7 +27,7 @@ func TestSignalDoneClosesDoneChannelOnce(t *testing.T) {
 func TestWriteLoopSignalsDoneOnWriteFailure(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	defer func() { _ = h.Close(context.Background()) }()
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	w := &ConnWrapper{
 		ctx:     context.Background(),
 		handler: h,

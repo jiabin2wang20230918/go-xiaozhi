@@ -102,9 +102,14 @@ func (w *ConnWrapper) WriteLoop(ctx context.Context) {
 
 	for {
 		select {
-		case event, ok := <-w.handler.Recv(ctx):
+		case raw, ok := <-w.handler.Recv(ctx):
 			if !ok {
 				return
+			}
+			speechSeq, event := unwrapQueuedWrite(raw)
+			currentSpeechSeq := w.handler.speechSeq.Load()
+			if !shouldDeliverQueuedWrite(speechSeq, event, currentSpeechSeq) {
+				continue
 			}
 			if _, ok := xiaozhiapi.IsServerEvent(event); ok {
 				// 每段语音开始时重置流控，避免 position/sent 跨段累积导致后续段节流失效
