@@ -63,6 +63,7 @@ type Handler struct {
 	speechSeq      atomic.Uint64
 	closeAfterChat atomic.Bool
 	speaking       atomic.Bool // 是否正在流式发送语音（用于 listen/start 判断是否需中止上一轮）
+	textFlightMu   sync.Mutex  // serializes supersede for processText / utterance async turns
 	writeQ         chan any
 
 	mu             sync.Mutex
@@ -301,6 +302,7 @@ func (h *Handler) handleAudio(ctx context.Context, event *xiaozhiapi.ClientEvent
 
 func (h *Handler) processUtteranceAsync(frames []voice.AudioFrame) {
 	frames = append([]voice.AudioFrame(nil), frames...)
+	h.supersedeInFlightTextTurn()
 	go func() {
 		if err := h.processUtterance(h.ctx, frames); err != nil {
 			h.resumeAudioReception()
@@ -309,6 +311,7 @@ func (h *Handler) processUtteranceAsync(frames []voice.AudioFrame) {
 }
 
 func (h *Handler) processDetectedTextAsync(text string) {
+	h.supersedeInFlightTextTurn()
 	go func() {
 		defer h.resumeAudioReception()
 		_ = h.processText(h.ctx, text)
@@ -316,9 +319,21 @@ func (h *Handler) processDetectedTextAsync(text string) {
 }
 
 func (h *Handler) processNoVoiceTimeoutAsync() {
+	h.supersedeInFlightTextTurn()
 	go func() {
 		_ = h.processNoVoiceTimeout(h.ctx)
 	}()
+}
+
+// supersedeInFlightTextTurn starts a new text/utterance turn: bump speechSeq so any in-flight
+// processText stops enqueueing speech media, and flush device playback when streaming.
+func (h *Handler) supersedeInFlightTextTurn() {
+	h.textFlightMu.Lock()
+	defer h.textFlightMu.Unlock()
+	h.speechSeq.Add(1)
+	if h.speaking.Load() {
+		_ = h.writeTTSStop()
+	}
 }
 
 func (h *Handler) handleAbort(ctx context.Context, event *xiaozhiapi.ClientEventAbort) error {
@@ -2451,13 +2466,5 @@ func (h *Handler) enqueueWrite(speechSeq uint64, event any) (err error) {
 		}
 	}()
 	item := queuedWrite{speechSeq: speechSeq, payload: event}
-	select {
-	case h.writeQ <- item:
-		if h.testAfterWrite != nil {
-			h.testAfterWrite(event)
-		}
-		return nil
-	case <-h.ctx.Done():
-		return h.ctx.Err()
-	}
+	return h.tryEnqueueWrite(item)
 }
