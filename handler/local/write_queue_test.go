@@ -125,3 +125,71 @@ func TestWriteLoopDropsStaleAudioAfterAbortStop(t *testing.T) {
 		t.Fatalf("stale audio must not reach device after stop, got %+v", binaryWrites)
 	}
 }
+
+func TestReclaimWriteQRoomDropsOldestBinaryAdmitsControl(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	pullWritePayload(<-h.Recv(context.Background()))
+	h.writeQ = make(chan any, 4)
+
+	seq := h.speechSeq.Load()
+	for i := 0; i < 4; i++ {
+		if err := h.writeSpeech([]byte{byte(i)}, seq); err != nil {
+			t.Fatalf("fill binary %d: %v", i, err)
+		}
+	}
+	if len(h.writeQ) != 4 {
+		t.Fatalf("expected full queue, len=%d", len(h.writeQ))
+	}
+
+	stop := &xiaozhiapi.ServerEventTTS{
+		ServerEventBase: xiaozhiapi.ServerEventBase{Type: xiaozhiapi.ServerEventTypeTTS, SessionId: h.sessionID},
+		State:           xiaozhiapi.ServerTTSStateStop,
+	}
+	if err := h.write(stop); err != nil {
+		t.Fatalf("enqueue control under backpressure: %v", err)
+	}
+
+	foundStop := false
+	for i := 0; i < 6; i++ {
+		raw := <-h.Recv(context.Background())
+		got := pullWritePayload(raw)
+		if tts, ok := got.(*xiaozhiapi.ServerEventTTS); ok && tts.State == xiaozhiapi.ServerTTSStateStop {
+			foundStop = true
+			break
+		}
+	}
+	if !foundStop {
+		t.Fatal("expected tts stop after reclaim dropped oldest binary")
+	}
+	if len(h.writeQ) > 4 {
+		t.Fatalf("queue length must not exceed capacity, len=%d", len(h.writeQ))
+	}
+}
+
+func TestEnqueueWriteDropsNewBinaryWhenQueueSaturated(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	pullWritePayload(<-h.Recv(context.Background()))
+	h.writeQ = make(chan any, 2)
+	seq := h.speechSeq.Load()
+
+	if err := h.writeSpeech([]byte("a"), seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.writeSpeech([]byte("b"), seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.writeSpeech([]byte("overflow"), seq); err != nil {
+		t.Fatalf("saturated binary enqueue should drop, got err=%v", err)
+	}
+	if len(h.writeQ) != 2 {
+		t.Fatalf("expected len 2 after drop, got %d", len(h.writeQ))
+	}
+	if err := h.write(&xiaozhiapi.ServerEventSTT{
+		ServerEventBase: xiaozhiapi.ServerEventBase{Type: xiaozhiapi.ServerEventTypeSTT, SessionId: h.sessionID},
+		Text:            "hi",
+	}); err != nil {
+		t.Fatalf("control must enqueue after reclaim: %v", err)
+	}
+}

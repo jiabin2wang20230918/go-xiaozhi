@@ -2480,6 +2480,71 @@ func TestListenStartDoesNotEmitStopWhenNoSpeechInFlight(t *testing.T) {
 	}
 }
 
+func TestSupersedeInFlightTextTurnCancelsPreviousAsyncTurn(t *testing.T) {
+	h := NewHandler(context.Background(), ClientInfo{})
+	t.Cleanup(func() { _ = h.Close(context.Background()) })
+	pullWritePayload(<-h.Recv(context.Background()))
+	gate := make(chan struct{})
+	tts := &gatedSegmentTTS{gate: gate}
+	h.pipeline = voice.NewPipeline(
+		fakeASR{text: "第一轮"},
+		fakeLLM{text: []string{"第一句。", "第二句。"}},
+		tts,
+	)
+	h.sleep = func(time.Duration) {}
+
+	var supersedeOnce sync.Once
+	h.testAfterWrite = func(event any) {
+		tts, ok := event.(*xiaozhiapi.ServerEventTTS)
+		if !ok || tts.State != xiaozhiapi.ServerTTSStateSentenceEnd || tts.Text != "第一句" {
+			return
+		}
+		supersedeOnce.Do(func() {
+			h.pipeline = voice.NewPipeline(
+				fakeASR{text: "unused"},
+				fakeLLM{text: []string{"新轮回复。"}},
+				captureSegmentTTS{},
+			)
+			h.processDetectedTextAsync("第二轮")
+		})
+	}
+
+	h.processUtteranceAsync([]voice.AudioFrame{{PCM: pcmFrame()}})
+	assertSTTStartSequence(t, h, "第一轮")
+	firstEnd, _ := drainUntilTTSState(t, h, xiaozhiapi.ServerTTSStateSentenceEnd)
+	if firstEnd.Text != "第一句" {
+		t.Fatalf("expected first sentence_end 第一句, got %q", firstEnd.Text)
+	}
+
+	stop := recvAs[*xiaozhiapi.ServerEventTTS](t, h)
+	if stop.State != xiaozhiapi.ServerTTSStateStop {
+		t.Fatalf("expected tts stop from supersede while speaking, got %s", stop.State)
+	}
+	assertSTTStartSequence(t, h, "第二轮")
+	start := recvAs[*xiaozhiapi.ServerEventTTS](t, h)
+	if start.State != xiaozhiapi.ServerTTSStateSentenceStart || start.Text != "新轮回复" {
+		t.Fatalf("expected new turn sentence_start, got state=%s text=%q", start.State, start.Text)
+	}
+
+	close(gate)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case raw := <-h.Recv(context.Background()):
+			payload := pullWritePayload(raw)
+			if frame, ok := payload.([]byte); ok && string(frame) == "第二句" {
+				t.Fatal("stale second segment from superseded turn must not enqueue")
+			}
+			if ttsEnd, ok := payload.(*xiaozhiapi.ServerEventTTS); ok &&
+				ttsEnd.State == xiaozhiapi.ServerTTSStateSentenceEnd && ttsEnd.Text == "第二句" {
+				t.Fatal("stale sentence_end from superseded turn must not enqueue")
+			}
+		default:
+			return
+		}
+	}
+}
+
 func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
