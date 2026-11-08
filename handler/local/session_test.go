@@ -58,7 +58,7 @@ func TestNewHandlerSendsHello(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1", ClientID: "client-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
 
-	event := <-h.Recv(context.Background())
+	event := pullWritePayload(<-h.Recv(context.Background()))
 	hello, ok := event.(*xiaozhiapi.ServerEventHello)
 	if !ok {
 		t.Fatalf("expected hello event, got %T", event)
@@ -98,7 +98,7 @@ func TestHelloResponseUsesConfiguredAudioParamsLikePython(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err := h.handleHello(context.Background(), &xiaozhiapi.ClientEventHello{
 		ClientEventBase: xiaozhiapi.ClientEventBase{
@@ -113,7 +113,7 @@ func TestHelloResponseUsesConfiguredAudioParamsLikePython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle hello: %v", err)
 	}
-	hello := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventHello)
+	hello := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventHello)
 	if hello.AudioParams.SampleRate != 16000 || hello.AudioParams.FrameDuration != 60 {
 		t.Fatalf("hello should use configured audio params: %+v", hello.AudioParams)
 	}
@@ -125,7 +125,7 @@ func TestHelloResponseUsesConfiguredAudioParamsLikePython(t *testing.T) {
 func TestRawTextEventIsEchoed(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventRawText{Text: "123"})
 	if err != nil {
@@ -134,7 +134,7 @@ func TestRawTextEventIsEchoed(t *testing.T) {
 	if quit {
 		t.Fatal("raw text should not close the connection")
 	}
-	event := <-h.Recv(context.Background())
+	event := pullWritePayload(<-h.Recv(context.Background()))
 	if event != "123" {
 		t.Fatalf("expected raw text echo, got %#v", event)
 	}
@@ -190,7 +190,7 @@ func TestNewHandlerLoadsPrivateDeviceConfig(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if !h.runtime.Enabled {
 		t.Fatal("private runtime should be enabled")
@@ -240,7 +240,7 @@ func TestNewHandlerDoesNotLoadPrivateConfigByClientIDWhenDeviceIDMissing(t *test
 
 	h := NewHandler(context.Background(), ClientInfo{ClientID: "client-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if h.runtime.Enabled {
 		t.Fatal("private runtime should stay disabled without device-id")
@@ -271,7 +271,7 @@ func TestNewHandlerDoesNotCreatePrivateConfigByClientIDWhenDeviceIDMissing(t *te
 
 	h := NewHandler(context.Background(), ClientInfo{ClientID: "client-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if h.runtime.Enabled {
 		t.Fatal("private runtime should stay disabled without device-id")
@@ -289,7 +289,7 @@ func TestNewHandlerDoesNotCreatePrivateConfigByClientIDWhenDeviceIDMissing(t *te
 func TestAbortSendsTTSStop(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventAbort{})
 	if err != nil {
@@ -299,7 +299,7 @@ func TestAbortSendsTTSStop(t *testing.T) {
 		t.Fatal("abort should not close the websocket")
 	}
 
-	event := <-h.Recv(context.Background())
+	event := pullWritePayload(<-h.Recv(context.Background()))
 	tts, ok := event.(*xiaozhiapi.ServerEventTTS)
 	if !ok {
 		t.Fatalf("expected tts event, got %T", event)
@@ -312,7 +312,7 @@ func TestAbortSendsTTSStop(t *testing.T) {
 func TestUnknownClientEventIsIgnoredLikePython(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventUnknown{
 		Type: "future",
@@ -322,7 +322,8 @@ func TestUnknownClientEventIsIgnoredLikePython(t *testing.T) {
 		t.Fatalf("unknown event got err=%v quit=%v", err, quit)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("unknown event should not emit response, got %T", event)
 	default:
 	}
@@ -331,7 +332,7 @@ func TestUnknownClientEventIsIgnoredLikePython(t *testing.T) {
 func TestJSONStringClientEventIsIgnored(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	event, err := h.UnmarshalClientTextEvent([]byte(`"plain ping"`))
 	if err != nil {
@@ -342,7 +343,8 @@ func TestJSONStringClientEventIsIgnored(t *testing.T) {
 		t.Fatalf("json string event got err=%v quit=%v", err, quit)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("json string event should not emit response, got %T", event)
 	default:
 	}
@@ -363,7 +365,7 @@ func TestListenDetectTextRunsTextPipeline(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "should-not-run"},
 		fakeLLM{text: []string{"检测回复。"}},
@@ -379,7 +381,7 @@ func TestListenDetectTextRunsTextPipeline(t *testing.T) {
 func TestListenDetectTextResumesAudioReception(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &sequentialLLM{responses: [][]string{{"文本回复。"}, {"语音回复。"}}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "后续语音"},
@@ -421,7 +423,7 @@ func TestListenDetectTextResumesAudioReception(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "后续语音")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "语音回复" {
 		t.Fatalf("unexpected resumed audio response: %q", sentenceStart.Text)
 	}
@@ -433,7 +435,7 @@ func TestListenDetectTextResumesAudioReception(t *testing.T) {
 func TestListenDetectTextIgnoresPythonYeahSpecialCase(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "should-not-run"},
@@ -449,7 +451,8 @@ func TestListenDetectTextIgnoresPythonYeahSpecialCase(t *testing.T) {
 		t.Fatalf("dispatch listen detect: %v", err)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("Yeah special case should not emit events, got %T", event)
 	default:
 	}
@@ -465,7 +468,7 @@ func TestExitCommandSendsSTTAndClosesWithoutLLM(t *testing.T) {
 	defer restore()
 
 	h := NewHandler(context.Background(), ClientInfo{})
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "再见"},
@@ -496,7 +499,7 @@ func TestExitCommandNormalizationMatchesPythonRemovePunctuation(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if !h.isExitCommand("再见?") {
 		t.Fatal("python punctuation removal should match question mark")
@@ -522,7 +525,7 @@ func TestMutedWakeupWordSendsSTTAndTTSStopWithoutLLM(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "小智"},
@@ -534,12 +537,13 @@ func TestMutedWakeupWordSendsSTTAndTTSStopWithoutLLM(t *testing.T) {
 		t.Fatalf("process wakeup word: %v", err)
 	}
 	assertSTTStartSequence(t, h, "小智")
-	tts := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	tts := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if tts.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected tts stop, got %s", tts.State)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("muted wakeup word should not emit more events, got %T", event)
 	default:
 	}
@@ -561,7 +565,7 @@ func TestListenDetectMutedWakeupWordSendsSTTAndTTSStopWithoutLLM(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "should-not-run"},
@@ -578,12 +582,13 @@ func TestListenDetectMutedWakeupWordSendsSTTAndTTSStopWithoutLLM(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "小智")
-	tts := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	tts := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if tts.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected tts stop, got %s", tts.State)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("muted wakeup detect should not emit more events, got %T", event)
 	default:
 	}
@@ -612,7 +617,7 @@ func TestWakeupWordResponseCacheSendsCachedAudioWithoutLLM(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "小智"},
@@ -624,19 +629,19 @@ func TestWakeupWordResponseCacheSendsCachedAudioWithoutLLM(t *testing.T) {
 		t.Fatalf("process wakeup cache: %v", err)
 	}
 	assertSTTStartSequence(t, h, "小智")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "欢迎回来" {
 		t.Fatalf("unexpected sentence_start: %+v", sentenceStart)
 	}
-	audioFrame := (<-h.Recv(context.Background())).([]byte)
+	audioFrame := (pullWritePayload(<-h.Recv(context.Background()))).([]byte)
 	if string(audioFrame) != "cached-opus" {
 		t.Fatalf("unexpected cached audio frame: %q", audioFrame)
 	}
-	sentenceEnd := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceEnd := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd || sentenceEnd.Text != "欢迎回来" {
 		t.Fatalf("unexpected sentence_end: %+v", sentenceEnd)
 	}
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected tts stop, got %s", stop.State)
 	}
@@ -665,7 +670,7 @@ func TestWakeupWordResponseCacheAllowsSmallCustomCacheWhenConfigured(t *testing.
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "小智"},
@@ -677,11 +682,11 @@ func TestWakeupWordResponseCacheAllowsSmallCustomCacheWhenConfigured(t *testing.
 		t.Fatalf("process wakeup custom cache: %v", err)
 	}
 	assertSTTStartSequence(t, h, "小智")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "自定义欢迎" {
 		t.Fatalf("unexpected sentence text: %q", sentenceStart.Text)
 	}
-	audioFrame := (<-h.Recv(context.Background())).([]byte)
+	audioFrame := (pullWritePayload(<-h.Recv(context.Background()))).([]byte)
 	if string(audioFrame) != "tiny-custom-cache" {
 		t.Fatalf("unexpected cached audio frame: %q", audioFrame)
 	}
@@ -712,7 +717,7 @@ func TestWakeupWordResponseCacheSplitsLengthPrefixedOpus(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "小智"},
 		&countingLLM{text: []string{"不应该回复"}},
@@ -723,14 +728,14 @@ func TestWakeupWordResponseCacheSplitsLengthPrefixedOpus(t *testing.T) {
 		t.Fatalf("process wakeup cache: %v", err)
 	}
 	assertSTTStartSequence(t, h, "小智")
-	<-h.Recv(context.Background()) // sentence_start
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "frame1" {
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_start
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "frame1" {
 		t.Fatalf("first cached frame = %q", got)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "frame2" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "frame2" {
 		t.Fatalf("second cached frame = %q", got)
 	}
-	sentenceEnd := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceEnd := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd {
 		t.Fatalf("expected sentence_end, got %+v", sentenceEnd)
 	}
@@ -767,7 +772,7 @@ func TestWakeupWordResponseCacheMissFallsBackToLLM(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"正常回复。"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "小智"},
@@ -779,7 +784,7 @@ func TestWakeupWordResponseCacheMissFallsBackToLLM(t *testing.T) {
 		t.Fatalf("process wakeup cache miss: %v", err)
 	}
 	assertSTTStartSequence(t, h, "小智")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "正常回复" {
 		t.Fatalf("unexpected fallback sentence: %q", sentenceStart.Text)
 	}
@@ -834,7 +839,7 @@ func TestIotEventKeepsDescriptorAndStateShape(t *testing.T) {
 func TestIotToolsQueryStateAndSendCommand(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
@@ -884,7 +889,7 @@ func TestIotToolsQueryStateAndSendCommand(t *testing.T) {
 	if result.Command == nil {
 		t.Fatal("control tool should produce command")
 	}
-	event := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventIot)
+	event := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventIot)
 	if len(event.Commands) != 1 || event.Commands[0].Name != "Lamp" || event.Commands[0].Method != "SetPower" {
 		t.Fatalf("unexpected iot command event: %+v", event)
 	}
@@ -913,7 +918,7 @@ func TestIotDescriptorArrayShapeBuildsTools(t *testing.T) {
 	}
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	err, _ = h.DispatchClientEvent(context.Background(), event)
 	if err != nil {
 		t.Fatalf("dispatch iot array descriptor: %v", err)
@@ -934,7 +939,7 @@ func TestIotDescriptorArrayShapeBuildsTools(t *testing.T) {
 func TestIotDescriptorInitializesPythonDefaultStateWithoutStateEvent(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
@@ -963,7 +968,7 @@ func TestIotDescriptorInitializesPythonDefaultStateWithoutStateEvent(t *testing.
 func TestVoicePipelineToolCallSendsIotCommand(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
 			Name:        "Lamp",
@@ -991,11 +996,11 @@ func TestVoicePipelineToolCallSendsIotCommand(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "关灯")
-	commandEvent := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventIot)
+	commandEvent := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventIot)
 	if len(commandEvent.Commands) != 1 || commandEvent.Commands[0].Name != "Lamp" {
 		t.Fatalf("unexpected iot command: %+v", commandEvent)
 	}
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "已关灯" {
 		t.Fatalf("unexpected tool speech: %q", sentenceStart.Text)
 	}
@@ -1004,7 +1009,7 @@ func TestVoicePipelineToolCallSendsIotCommand(t *testing.T) {
 func TestProcessTextUsesPlainLLMWhenIntentModeIsNoIntent(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Mode = "nointent"
 	llm := &modeAwareLLM{
 		plain: []string{"普通回复。"},
@@ -1021,7 +1026,7 @@ func TestProcessTextUsesPlainLLMWhenIntentModeIsNoIntent(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "几点了")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "普通回复" {
 		t.Fatalf("unexpected plain response: %q", sentenceStart.Text)
 	}
@@ -1036,7 +1041,7 @@ func TestProcessTextUsesPlainLLMWhenIntentModeIsNoIntent(t *testing.T) {
 func TestProcessTextUsesToolsWhenIntentModeIsFunctionCall(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Mode = "function_call"
 	llm := &modeAwareLLM{
 		plain: []string{"不应该使用。"},
@@ -1053,7 +1058,7 @@ func TestProcessTextUsesToolsWhenIntentModeIsFunctionCall(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "你好")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "工具模式回复" {
 		t.Fatalf("unexpected tool response: %q", sentenceStart.Text)
 	}
@@ -1068,7 +1073,7 @@ func TestProcessTextUsesToolsWhenIntentModeIsFunctionCall(t *testing.T) {
 func TestProcessTextUsesLegacyIntentLLMToolBeforePlainChat(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Mode = "intent_llm"
 	llm := &modeAwareLLM{
 		plain: []string{"不应该使用。"},
@@ -1088,7 +1093,7 @@ func TestProcessTextUsesLegacyIntentLLMToolBeforePlainChat(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "几点了")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "当前日期: 2026-06-15，当前时间: 08:09:10， 星期一" {
 		t.Fatalf("unexpected intent tool response: %q", sentenceStart.Text)
 	}
@@ -1103,7 +1108,7 @@ func TestProcessTextUsesLegacyIntentLLMToolBeforePlainChat(t *testing.T) {
 func TestProcessTextIntentLLMContinueChatFallsBackToPlainLLM(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Mode = "intent_llm"
 	llm := &modeAwareLLM{
 		plain: []string{"普通回复。"},
@@ -1120,7 +1125,7 @@ func TestProcessTextIntentLLMContinueChatFallsBackToPlainLLM(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "聊聊天")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "普通回复" {
 		t.Fatalf("unexpected fallback response: %q", sentenceStart.Text)
 	}
@@ -1135,7 +1140,7 @@ func TestProcessTextIntentLLMContinueChatFallsBackToPlainLLM(t *testing.T) {
 func TestVoiceToolsIncludeNecessaryToolsAndConfiguredPlugins(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Functions = []string{"play_music", "get_news", "get_weather", "baidu_search", "hass_get_state", "hass_set_state", "hass_play_music"}
 
 	tools := h.voiceTools()
@@ -1218,7 +1223,7 @@ func TestVoiceToolsIncludeNecessaryToolsAndConfiguredPlugins(t *testing.T) {
 func TestVoiceToolsHideUnconfiguredOptionalPlugins(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Functions = nil
 
 	names := toolNames(h.voiceTools())
@@ -1235,7 +1240,7 @@ func TestVoiceToolsHideUnconfiguredOptionalPlugins(t *testing.T) {
 func TestAppendHomeAssistantDevicesToPrompt(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Local.Prompt = "base prompt"
 	h.runtime.Intent.Functions = []string{"hass_get_state"}
 	h.runtime.Plugins.HomeAssistant.Devices = []string{"客厅,音箱,media_player.room"}
@@ -1260,7 +1265,7 @@ func toolNames(tools []voice.Tool) []string {
 func TestHandleIotIgnoresDescriptorsOutsideFunctionCallModeLikePython(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Mode = "nointent"
 
 	if err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
@@ -1293,7 +1298,7 @@ func TestHandleIotIgnoresDescriptorsOutsideFunctionCallModeLikePython(t *testing
 
 func TestHandleExitIntentToolSpeaksGoodbyeAndClosesAfterStop(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "我先走了"},
 		&fakeToolLLM{events: []voice.LLMEvent{{ToolCall: &voice.ToolCall{
@@ -1308,13 +1313,13 @@ func TestHandleExitIntentToolSpeaksGoodbyeAndClosesAfterStop(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "我先走了")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "下次再聊" {
 		t.Fatalf("unexpected goodbye sentence: %+v", sentenceStart)
 	}
-	<-h.Recv(context.Background()) // audio
-	<-h.Recv(context.Background()) // sentence_end
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	pullWritePayload(<-h.Recv(context.Background())) // audio
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected tts stop, got %s", stop.State)
 	}
@@ -1326,7 +1331,7 @@ func TestHandleExitIntentToolSpeaksGoodbyeAndClosesAfterStop(t *testing.T) {
 func TestUnknownToolCallSpeaksPythonNotFoundMessage(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "调用未知功能"},
 		&fakeToolLLM{events: []voice.LLMEvent{{ToolCall: &voice.ToolCall{
@@ -1341,18 +1346,18 @@ func TestUnknownToolCallSpeaksPythonNotFoundMessage(t *testing.T) {
 		t.Fatalf("process missing tool: %v", err)
 	}
 	assertSTTStartSequence(t, h, "调用未知功能")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "没有找到对应的函数" {
 		t.Fatalf("unexpected missing tool speech: %+v", sentenceStart)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "没有找到对应的函数" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "没有找到对应的函数" {
 		t.Fatalf("unexpected missing tool audio: %q", got)
 	}
-	sentenceEnd := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceEnd := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd || sentenceEnd.Text != "没有找到对应的函数" {
 		t.Fatalf("unexpected missing tool sentence_end: %+v", sentenceEnd)
 	}
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected stop after missing tool speech, got %+v", stop)
 	}
@@ -1366,7 +1371,7 @@ func TestUnknownToolCallSpeaksPythonNotFoundMessage(t *testing.T) {
 func TestUnknownMCPToolCallSpeaksPythonNotFoundMessage(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	if h.mcpManager != nil {
 		_ = h.mcpManager.Close()
 	}
@@ -1385,15 +1390,15 @@ func TestUnknownMCPToolCallSpeaksPythonNotFoundMessage(t *testing.T) {
 		t.Fatalf("process missing mcp tool: %v", err)
 	}
 	assertSTTStartSequence(t, h, "调用未知 MCP 功能")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "没有找到对应的函数" {
 		t.Fatalf("unexpected missing mcp tool speech: %+v", sentenceStart)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "没有找到对应的函数" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "没有找到对应的函数" {
 		t.Fatalf("unexpected missing mcp tool audio: %q", got)
 	}
-	<-h.Recv(context.Background()) // sentence_end
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected stop after missing mcp tool speech, got %+v", stop)
 	}
@@ -1414,7 +1419,7 @@ func TestPlayMusicToolSendsLocalMusicAudio(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Plugins.PlayMusic = config.PlayMusicConf{
 		MusicDir: musicDir,
 		MusicExt: []string{".p3"},
@@ -1428,21 +1433,21 @@ func TestPlayMusicToolSendsLocalMusicAudio(t *testing.T) {
 		t.Fatalf("unexpected tool message: %q", msg)
 	}
 	assertSTTStartSequence(t, h, "正在播放两只老虎.p3")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "两只老虎.p3" {
 		t.Fatalf("unexpected music sentence_start: %+v", sentenceStart)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "frame1" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "frame1" {
 		t.Fatalf("first music frame = %q", got)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "frame2" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "frame2" {
 		t.Fatalf("second music frame = %q", got)
 	}
-	sentenceEnd := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceEnd := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd {
 		t.Fatalf("expected sentence_end, got %+v", sentenceEnd)
 	}
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected stop, got %+v", stop)
 	}
@@ -1460,7 +1465,7 @@ func TestVoicePipelinePlayMusicToolSpeaksPythonCompatibleAckAfterMusic(t *testin
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Plugins.PlayMusic = config.PlayMusicConf{
 		MusicDir: musicDir,
 		MusicExt: []string{".p3"},
@@ -1480,25 +1485,25 @@ func TestVoicePipelinePlayMusicToolSpeaksPythonCompatibleAckAfterMusic(t *testin
 	}
 	assertSTTStartSequence(t, h, "播放音乐")
 	assertSTTStartSequence(t, h, "正在播放歌.p3")
-	<-h.Recv(context.Background()) // sentence_start
-	<-h.Recv(context.Background()) // music frame
-	<-h.Recv(context.Background()) // sentence_end
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_start
+	pullWritePayload(<-h.Recv(context.Background())) // music frame
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected music stop, got %+v", stop)
 	}
-	ackStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	ackStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if ackStart.State != xiaozhiapi.ServerTTSStateSentenceStart || ackStart.Text != "正在为您播放音乐" {
 		t.Fatalf("unexpected play music ack: %+v", ackStart)
 	}
-	if got := string((<-h.Recv(context.Background())).([]byte)); got != "正在为您播放音乐" {
+	if got := string((pullWritePayload(<-h.Recv(context.Background()))).([]byte)); got != "正在为您播放音乐" {
 		t.Fatalf("unexpected ack audio frame: %q", got)
 	}
-	ackEnd := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	ackEnd := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if ackEnd.State != xiaozhiapi.ServerTTSStateSentenceEnd || ackEnd.Text != "正在为您播放音乐" {
 		t.Fatalf("unexpected play music ack end: %+v", ackEnd)
 	}
-	finalStop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	finalStop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if finalStop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected final stop after ack, got %+v", finalStop)
 	}
@@ -1507,7 +1512,7 @@ func TestVoicePipelinePlayMusicToolSpeaksPythonCompatibleAckAfterMusic(t *testin
 func TestGetTimeToolReturnsPythonCompatibleTimeText(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.now = func() time.Time {
 		return time.Date(2026, 6, 15, 8, 9, 10, 0, time.Local)
 	}
@@ -1528,7 +1533,7 @@ func TestGetTimeToolReturnsPythonCompatibleTimeText(t *testing.T) {
 func TestGetTimeToolResultFeedsSecondLLMCall(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.now = func() time.Time {
 		return time.Date(2026, 6, 15, 8, 9, 10, 0, time.Local)
 	}
@@ -1548,7 +1553,7 @@ func TestGetTimeToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "现在几点")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "现在是上午八点九分" {
 		t.Fatalf("unexpected time reply: %q", sentenceStart.Text)
 	}
@@ -1564,7 +1569,7 @@ func TestGetTimeToolResultFeedsSecondLLMCall(t *testing.T) {
 func TestGetLunarToolReturnsPromptForSecondLLMCall(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.now = func() time.Time {
 		return time.Date(2026, 6, 15, 8, 9, 10, 0, time.Local)
 	}
@@ -1595,7 +1600,7 @@ func TestGetLunarToolReturnsPromptForSecondLLMCall(t *testing.T) {
 func TestGetLunarToolUsesConfiguredCommand(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.now = func() time.Time {
 		return time.Date(2026, 6, 15, 8, 9, 10, 0, time.Local)
 	}
@@ -1621,7 +1626,7 @@ func TestGetLunarToolUsesConfiguredCommand(t *testing.T) {
 func TestGetLunarToolFallsBackWhenConfiguredCommandReturnsEmpty(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.now = func() time.Time {
 		return time.Date(2026, 6, 15, 8, 9, 10, 0, time.Local)
 	}
@@ -1644,7 +1649,7 @@ func TestGetLunarToolFallsBackWhenConfiguredCommandReturnsEmpty(t *testing.T) {
 func TestPluginLoaderUpdatesOptionalTools(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.Intent.Functions = nil
 
 	message, err := h.executeToolCall(context.Background(), voice.ToolCall{
@@ -1692,7 +1697,7 @@ func TestGetNewsToolResultFeedsSecondLLMCall(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.newsClient = news.New(config.GetNewsConf{
 		DefaultRSSURL: server.URL,
 		CategoryURLs:  map[string]string{"finance": server.URL},
@@ -1714,7 +1719,7 @@ func TestGetNewsToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "播报财经新闻")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "这是一条测试新闻" {
 		t.Fatalf("unexpected news reply: %q", sentenceStart.Text)
 	}
@@ -1742,7 +1747,7 @@ func TestGetWeatherToolResultFeedsSecondLLMCall(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.weatherClient = weather.New(config.GetWeatherConf{
 		APIKey:  "test-key",
 		BaseURL: server.URL,
@@ -1764,7 +1769,7 @@ func TestGetWeatherToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "杭州天气")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "杭州今天多云，夜里有小雨" {
 		t.Fatalf("unexpected weather reply: %q", sentenceStart.Text)
 	}
@@ -1794,7 +1799,7 @@ func TestBaiduSearchToolResultFeedsSecondLLMCall(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.searchClient = search.New(config.BaiduSearchConf{
 		Enabled:          true,
 		SearchURL:        server.URL + "/s",
@@ -1819,7 +1824,7 @@ func TestBaiduSearchToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "搜索小智")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "找到一条关于小智的结果" {
 		t.Fatalf("unexpected search reply: %q", sentenceStart.Text)
 	}
@@ -1848,7 +1853,7 @@ func TestMCPToolResultFeedsSecondLLMCall(t *testing.T) {
 	}
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	if h.mcpManager != nil {
 		_ = h.mcpManager.Close()
 	}
@@ -1874,7 +1879,7 @@ func TestMCPToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "调用 MCP")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "MCP 返回了 hello" {
 		t.Fatalf("unexpected mcp reply: %q", sentenceStart.Text)
 	}
@@ -1903,7 +1908,7 @@ func TestMCPToolErrorFeedsSecondLLMCall(t *testing.T) {
 	}
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	if h.mcpManager != nil {
 		_ = h.mcpManager.Close()
 	}
@@ -1925,7 +1930,7 @@ func TestMCPToolErrorFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "调用 MCP 出错")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "MCP 工具调用失败了" {
 		t.Fatalf("unexpected mcp error reply: %q", sentenceStart.Text)
 	}
@@ -1949,7 +1954,7 @@ func TestHassGetStateToolResultFeedsSecondLLMCall(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.haClient = homeassistant.New(config.HomeAssistantConf{BaseURL: server.URL, APIKey: "token"})
 	h.haClient.HTTPClient = server.Client()
 	llm := &sequentialToolLLM{
@@ -1968,7 +1973,7 @@ func TestHassGetStateToolResultFeedsSecondLLMCall(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "音箱状态")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "音箱正在播放歌名" {
 		t.Fatalf("unexpected hass state reply: %q", sentenceStart.Text)
 	}
@@ -1992,7 +1997,7 @@ func TestHassPlayMusicToolSpeaksDirectResponse(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.haClient = homeassistant.New(config.HomeAssistantConf{BaseURL: server.URL})
 	h.haClient.HTTPClient = server.Client()
 	message, err := h.executeToolCall(context.Background(), voice.ToolCall{
@@ -2014,7 +2019,7 @@ func TestHassPlayMusicToolSpeaksDirectResponse(t *testing.T) {
 func TestChangeRoleToolUpdatesPromptAndSpeaksResult(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.history = []voice.Message{
 		{Role: "system", Content: "old prompt"},
 		{Role: "user", Content: "你好"},
@@ -2042,7 +2047,7 @@ func TestChangeRoleToolUpdatesPromptAndSpeaksResult(t *testing.T) {
 func TestChangeRoleToolDoesNotInsertSystemHistoryLikePython(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.history = []voice.Message{{Role: "user", Content: "你好"}}
 
 	message, err := h.executeToolCall(context.Background(), voice.ToolCall{
@@ -2077,7 +2082,7 @@ func TestChangeRoleDongbeiPromptKeepsPythonFixedName(t *testing.T) {
 func TestVoicePipelineChangeRoleToolUsesNewPromptForLaterChat(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "切换成英语老师"},
 		&fakeToolLLM{events: []voice.LLMEvent{{ToolCall: &voice.ToolCall{
@@ -2092,13 +2097,13 @@ func TestVoicePipelineChangeRoleToolUsesNewPromptForLaterChat(t *testing.T) {
 		t.Fatalf("process role change: %v", err)
 	}
 	assertSTTStartSequence(t, h, "切换成英语老师")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "切换角色成功,我是英语老师" {
 		t.Fatalf("unexpected role change speech: %q", sentenceStart.Text)
 	}
-	<-h.Recv(context.Background()) // audio
-	<-h.Recv(context.Background()) // sentence_end
-	<-h.Recv(context.Background()) // stop
+	pullWritePayload(<-h.Recv(context.Background())) // audio
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	pullWritePayload(<-h.Recv(context.Background())) // stop
 
 	llm := &captureHistoryLLM{chunks: []string{"好的。"}}
 	h.pipeline = voice.NewPipeline(
@@ -2117,7 +2122,7 @@ func TestVoicePipelineChangeRoleToolUsesNewPromptForLaterChat(t *testing.T) {
 func TestHandleDeviceToolGetsAndSetsSpeakerVolume(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
 			Name:        "Speaker",
@@ -2155,7 +2160,7 @@ func TestHandleDeviceToolGetsAndSetsSpeakerVolume(t *testing.T) {
 	if content != "音量已调整到55" {
 		t.Fatalf("unexpected raise response: %q", content)
 	}
-	command := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventIot)
+	command := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventIot)
 	if len(command.Commands) != 1 || command.Commands[0].Name != "Speaker" || command.Commands[0].Method != "SetVolume" {
 		t.Fatalf("unexpected volume command: %+v", command)
 	}
@@ -2167,7 +2172,7 @@ func TestHandleDeviceToolGetsAndSetsSpeakerVolume(t *testing.T) {
 func TestHandleDeviceToolClampsScreenBrightness(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	if err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
 			Name:        "Screen",
@@ -2196,7 +2201,7 @@ func TestHandleDeviceToolClampsScreenBrightness(t *testing.T) {
 	if content != "亮度已调整到100" {
 		t.Fatalf("unexpected brightness response: %q", content)
 	}
-	command := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventIot)
+	command := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventIot)
 	if got := command.Commands[0].Parameters["brightness"]; got != 100 {
 		t.Fatalf("brightness command got %#v want 100", got)
 	}
@@ -2205,7 +2210,7 @@ func TestHandleDeviceToolClampsScreenBrightness(t *testing.T) {
 func TestVoicePipelineHandleDeviceToolSendsCommandAndSpeaksResult(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	if err := h.handleIot(context.Background(), &xiaozhiapi.ClientEventIot{
 		Descriptors: []xiaozhiapi.IotDescriptor{{
 			Name:        "Speaker",
@@ -2240,14 +2245,14 @@ func TestVoicePipelineHandleDeviceToolSendsCommandAndSpeaksResult(t *testing.T) 
 		t.Fatalf("process utterance: %v", err)
 	}
 	assertSTTStartSequence(t, h, "调大音量")
-	command := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventIot)
+	command := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventIot)
 	if len(command.Commands) != 1 || command.Commands[0].Method != "SetVolume" {
 		t.Fatalf("unexpected device command: %+v", command)
 	}
 	if got := command.Commands[0].Parameters["volume"]; got != 30 {
 		t.Fatalf("volume command got %#v want 30", got)
 	}
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "音量已调整到30" {
 		t.Fatalf("unexpected handle_device speech: %q", sentenceStart.Text)
 	}
@@ -2256,7 +2261,7 @@ func TestVoicePipelineHandleDeviceToolSendsCommandAndSpeaksResult(t *testing.T) 
 func TestListenStopRunsVoicePipeline(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	// 注入确定性 pipeline：ASR 回 "收到语音"，EchoLLM(echo) 回 "我听到了：收到语音"
 	// 切成两段（"我听到了：" / "收到语音"），captureSegmentTTS 把每段文本转为非空音频帧。
 	// 不依赖默认配置（默认 pipeline 可能连真实 OpenAI，导致输出不确定）。
@@ -2290,7 +2295,7 @@ func TestListenStopRunsVoicePipeline(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "收到语音")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart {
 		t.Fatalf("expected sentence_start, got %s", sentenceStart.State)
 	}
@@ -2307,7 +2312,7 @@ func TestListenStopRunsVoicePipeline(t *testing.T) {
 	sawSecondAudio := false
 	var stop *xiaozhiapi.ServerEventTTS
 	for {
-		event := <-h.Recv(context.Background())
+		event := pullWritePayload(<-h.Recv(context.Background()))
 		if audioFrame, ok := event.([]byte); ok {
 			if len(audioFrame) == 0 {
 				t.Fatal("binary audio frame is empty")
@@ -2337,7 +2342,7 @@ func TestListenStopRunsVoicePipeline(t *testing.T) {
 func TestProcessTextStreamsFirstSegmentBeforeFullSynthesis(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	gate := make(chan struct{})
 	tts := &gatedSegmentTTS{gate: gate}
 	// 默认无 intent mode → 走 Respond（非 tools），echo/off 配置无关。
@@ -2359,7 +2364,7 @@ func TestProcessTextStreamsFirstSegmentBeforeFullSynthesis(t *testing.T) {
 	if start.State != xiaozhiapi.ServerTTSStateSentenceStart || start.Text != "第一句" {
 		t.Fatalf("expected first sentence_start (第一句), got state=%s text=%q", start.State, start.Text)
 	}
-	audioFrame := (<-h.Recv(context.Background())).([]byte)
+	audioFrame := (pullWritePayload(<-h.Recv(context.Background()))).([]byte)
 	if string(audioFrame) != "第一句" {
 		t.Fatalf("expected first segment audio, got %q", string(audioFrame))
 	}
@@ -2372,7 +2377,7 @@ func TestProcessTextStreamsFirstSegmentBeforeFullSynthesis(t *testing.T) {
 func TestAbortStopsStreamingSynthesis(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	tts := &countingSegmentTTS{}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "你好"},
@@ -2415,7 +2420,7 @@ func TestAbortStopsStreamingSynthesis(t *testing.T) {
 func TestListenStartAbortsInFlightStreamingSpeech(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	gate := make(chan struct{})
 	tts := &gatedSegmentTTS{gate: gate}
 	h.pipeline = voice.NewPipeline(
@@ -2458,7 +2463,7 @@ func TestListenStartAbortsInFlightStreamingSpeech(t *testing.T) {
 func TestListenStartDoesNotEmitStopWhenNoSpeechInFlight(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventListen{
 		State: xiaozhiapi.ClientStateListenStart,
@@ -2468,7 +2473,8 @@ func TestListenStartDoesNotEmitStopWhenNoSpeechInFlight(t *testing.T) {
 	}
 	// 无语音在途：writeQ 应为空，不发 stop。
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("expected no event when no speech in flight, got %T", event)
 	default:
 	}
@@ -2477,7 +2483,7 @@ func TestListenStartDoesNotEmitStopWhenNoSpeechInFlight(t *testing.T) {
 func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	asr := &sequentialASR{texts: []string{"第一句", "第二句"}}
 	llm := &sequentialLLM{responses: [][]string{{"第一段回复。"}, {"第二段回复。"}}}
 	h.pipeline = voice.NewPipeline(asr, llm, captureSegmentTTS{})
@@ -2532,14 +2538,14 @@ func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "第一句")
-	firstStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	firstStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if firstStart.Text != "第一段回复" {
 		t.Fatalf("first response text = %q", firstStart.Text)
 	}
 	sawSecondSTT := false
 	sawSecondSentence := false
 	for i := 0; i < 20; i++ {
-		event := <-h.Recv(context.Background())
+		event := pullWritePayload(<-h.Recv(context.Background()))
 		switch ev := event.(type) {
 		case *xiaozhiapi.ServerEventSTT:
 			if ev.Text == "第二句" {
@@ -2568,7 +2574,7 @@ func TestAudioReceptionResumesBeforeSpeechPlaybackFinishes(t *testing.T) {
 func TestListenStopProcessingDoesNotBlockAbort(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	asrStarted := make(chan struct{})
 	releaseASR := make(chan struct{})
 	h.pipeline = voice.NewPipeline(
@@ -2624,7 +2630,7 @@ func TestListenStopProcessingDoesNotBlockAbort(t *testing.T) {
 func TestShortAudioDoesNotRunVoicePipeline(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventListen{
 		State: xiaozhiapi.ClientStateListenStart,
@@ -2647,7 +2653,8 @@ func TestShortAudioDoesNotRunVoicePipeline(t *testing.T) {
 	}
 
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("short audio should not emit response event, got %T", event)
 	default:
 	}
@@ -2656,7 +2663,7 @@ func TestShortAudioDoesNotRunVoicePipeline(t *testing.T) {
 func TestAutoModeSilentAudioDoesNotRunVoicePipeline(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	for i := 0; i < 20; i++ {
 		err, _ := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventAppendBuffer{
@@ -2674,7 +2681,8 @@ func TestAutoModeSilentAudioDoesNotRunVoicePipeline(t *testing.T) {
 	}
 
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("silent audio should not emit response event, got %T", event)
 	default:
 	}
@@ -2683,7 +2691,7 @@ func TestAutoModeSilentAudioDoesNotRunVoicePipeline(t *testing.T) {
 func TestASRPunctuationOnlyTranscriptDoesNotRunTextPipeline(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"不应该回复"}}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "！！！"},
@@ -2695,7 +2703,8 @@ func TestASRPunctuationOnlyTranscriptDoesNotRunTextPipeline(t *testing.T) {
 		t.Fatalf("process utterance: %v", err)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("punctuation-only transcript should not emit events, got %T", event)
 	default:
 	}
@@ -2711,7 +2720,7 @@ func TestNoVoiceTimeoutSpeaksPromptAndClosesAfterChat(t *testing.T) {
 	defer restore()
 
 	h := NewHandler(context.Background(), ClientInfo{})
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.sleep = func(time.Duration) {}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "should-not-run"},
@@ -2723,13 +2732,13 @@ func TestNoVoiceTimeoutSpeaksPromptAndClosesAfterChat(t *testing.T) {
 		t.Fatalf("process no voice timeout: %v", err)
 	}
 	assertSTTStartSequence(t, h, "结束提示")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.State != xiaozhiapi.ServerTTSStateSentenceStart || sentenceStart.Text != "好的" {
 		t.Fatalf("unexpected sentence_start: %+v", sentenceStart)
 	}
-	<-h.Recv(context.Background()) // audio
-	<-h.Recv(context.Background()) // sentence_end
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	pullWritePayload(<-h.Recv(context.Background())) // audio
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected tts stop, got %s", stop.State)
 	}
@@ -2741,7 +2750,7 @@ func TestNoVoiceTimeoutSpeaksPromptAndClosesAfterChat(t *testing.T) {
 func TestSpeechResponseUsesSingleTTSStartAndStopForMultipleSegments(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.sleep = func(time.Duration) {}
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "hello"},
@@ -2757,7 +2766,7 @@ func TestSpeechResponseUsesSingleTTSStartAndStopForMultipleSegments(t *testing.T
 	states := []xiaozhiapi.ServerTTSState{}
 	texts := []string{}
 	for i := 0; i < 5; i++ {
-		event := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+		event := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 		states = append(states, event.State)
 		texts = append(texts, event.Text)
 	}
@@ -2786,7 +2795,7 @@ func TestTTSStopNotifyAudioIsSentBeforeStop(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.TTS.StopNotify = config.NotifyConf{Enabled: true, Path: notifyPath}
 
 	if err := h.sendSpeechResponse([]voice.SpeechSegment{{
@@ -2796,14 +2805,14 @@ func TestTTSStopNotifyAudioIsSentBeforeStop(t *testing.T) {
 		t.Fatalf("send speech response: %v", err)
 	}
 
-	<-h.Recv(context.Background()) // sentence_start
-	<-h.Recv(context.Background()) // speech audio
-	<-h.Recv(context.Background()) // sentence_end
-	notify := (<-h.Recv(context.Background())).([]byte)
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_start
+	pullWritePayload(<-h.Recv(context.Background())) // speech audio
+	pullWritePayload(<-h.Recv(context.Background())) // sentence_end
+	notify := (pullWritePayload(<-h.Recv(context.Background()))).([]byte)
 	if string(notify) != "notify-frame" {
 		t.Fatalf("unexpected notify frame: %q", notify)
 	}
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected stop after notify audio, got %s", stop.State)
 	}
@@ -2812,7 +2821,7 @@ func TestTTSStopNotifyAudioIsSentBeforeStop(t *testing.T) {
 func TestEmptySpeechAudioStillSendsSentenceEventsAndStop(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 
 	if err := h.sendSpeechResponse([]voice.SpeechSegment{{
 		Text:  "空音频",
@@ -2834,7 +2843,8 @@ func TestEmptySpeechAudioStillSendsSentenceEventsAndStop(t *testing.T) {
 		t.Fatalf("expected tts stop, got %s", stop.State)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		t.Fatalf("empty speech audio should not emit binary frames, got %T", event)
 	default:
 	}
@@ -2889,7 +2899,7 @@ func TestLoadCachedAudioSplitsP3Packets(t *testing.T) {
 func TestSentenceDelayUsesBaseAndLongSentenceExtra(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.runtime.SentenceDelay = config.SentenceDelayConf{
 		Enabled:             true,
 		BaseDelayMs:         200,
@@ -2916,7 +2926,7 @@ func TestSentenceDelayUsesBaseAndLongSentenceExtra(t *testing.T) {
 func TestAbortCancelsInFlightSpeechResponse(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	var abortOnce sync.Once
 	h.testAfterWrite = func(event any) {
 		frame, ok := event.([]byte)
@@ -2942,28 +2952,24 @@ func TestAbortCancelsInFlightSpeechResponse(t *testing.T) {
 		}}, seq)
 	}()
 
-	start := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	start := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if start.State != xiaozhiapi.ServerTTSStateSentenceStart {
 		t.Fatalf("expected sentence_start, got %s", start.State)
 	}
-	frame := (<-h.Recv(context.Background())).([]byte)
+	frame := (pullWritePayload(<-h.Recv(context.Background()))).([]byte)
 	if string(frame) != "frame-1" {
 		t.Fatalf("unexpected first frame: %q", frame)
 	}
-	stop := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	stop := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if stop.State != xiaozhiapi.ServerTTSStateStop {
 		t.Fatalf("expected abort tts stop, got %s", stop.State)
-	}
-	end := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
-	if end.State != xiaozhiapi.ServerTTSStateSentenceEnd || end.Text != "长句" {
-		t.Fatalf("expected python-compatible sentence_end after abort stop, got %+v", end)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("send speech response: %v", err)
 	}
 	select {
-	case event := <-h.Recv(context.Background()):
-		t.Fatalf("canceled speech should not emit more events, got %T", event)
+	case raw := <-h.Recv(context.Background()):
+		t.Fatalf("canceled speech should not emit more events, got %T", pullWritePayload(raw))
 	default:
 	}
 }
@@ -2971,7 +2977,7 @@ func TestAbortCancelsInFlightSpeechResponse(t *testing.T) {
 func TestUnboundPrivateDeviceSpeaksAuthCodeWithoutCallingLLM(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	llm := &countingLLM{text: []string{"normal reply"}}
 	h.runtime.Enabled = true
 	h.runtime.Device.Owner = ""
@@ -2987,7 +2993,7 @@ func TestUnboundPrivateDeviceSpeaksAuthCodeWithoutCallingLLM(t *testing.T) {
 	}
 
 	assertSTTStartSequence(t, h, "hello")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "请在后台输入验证码：1 2 3 4 5 6" {
 		t.Fatalf("unexpected auth prompt: %q", sentenceStart.Text)
 	}
@@ -3034,7 +3040,7 @@ func TestRemovePunctuationLikePython(t *testing.T) {
 func TestProcessTextSavesRawAssistantTextLikePythonDialogue(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	h.pipeline = voice.NewPipeline(
 		fakeASR{text: "unused"},
 		fakeLLM{text: []string{"**你好**，[看这里](https://example.com)。"}},
@@ -3045,7 +3051,7 @@ func TestProcessTextSavesRawAssistantTextLikePythonDialogue(t *testing.T) {
 		t.Fatalf("process text: %v", err)
 	}
 	assertSTTStartSequence(t, h, "用户语音")
-	sentenceStart := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventTTS)
+	sentenceStart := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventTTS)
 	if sentenceStart.Text != "你好，看这里" {
 		t.Fatalf("tts should use cleaned text, got %q", sentenceStart.Text)
 	}
@@ -3076,7 +3082,7 @@ func TestAssistantHistoryContentEmptyForSideEffectOnlyResponse(t *testing.T) {
 
 func TestCloseSavesDialogueMemory(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	mem := &fakeMemory{}
 	h.memory = mem
 	h.pipeline = voice.NewPipeline(
@@ -3108,7 +3114,7 @@ func TestCloseSavesDialogueMemory(t *testing.T) {
 
 func TestCloseWhileBackgroundProcessingDoesNotPanic(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
-	<-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background()))
 	asrStarted := make(chan struct{})
 	releaseASR := make(chan struct{})
 	h.pipeline = voice.NewPipeline(
@@ -3442,11 +3448,12 @@ func recvAs[T any](t *testing.T, h *Handler) T {
 	t.Helper()
 
 	select {
-	case event, ok := <-h.Recv(context.Background()):
+	case raw, ok := <-h.Recv(context.Background()):
 		if !ok {
 			var zero T
 			t.Fatalf("handler channel closed while waiting for %T", zero)
 		}
+		event := pullWritePayload(raw)
 		typed, ok := event.(T)
 		if !ok {
 			var zero T
@@ -3466,7 +3473,8 @@ func drainUntilTTSState(t *testing.T, h *Handler, state xiaozhiapi.ServerTTSStat
 	sawAudio := false
 	for {
 		select {
-		case event := <-h.Recv(context.Background()):
+		case raw := <-h.Recv(context.Background()):
+			event := pullWritePayload(raw)
 			if audioFrame, ok := event.([]byte); ok {
 				if len(audioFrame) == 0 {
 					t.Fatal("binary audio frame is empty")
@@ -3570,13 +3578,13 @@ func TestHelloEventCarriesServerTime(t *testing.T) {
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
 	fixed := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 	h.now = func() time.Time { return fixed }
-	<-h.Recv(context.Background()) // 构造时发送的 hello
+	pullWritePayload(<-h.Recv(context.Background())) // 构造时发送的 hello
 
 	err := h.handleHello(context.Background(), &xiaozhiapi.ClientEventHello{})
 	if err != nil {
 		t.Fatalf("handle hello: %v", err)
 	}
-	hello := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventHello)
+	hello := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventHello)
 	if hello.ServerTime != fixed.Unix() {
 		t.Fatalf("server_time got %d, want %d", hello.ServerTime, fixed.Unix())
 	}
@@ -3585,7 +3593,7 @@ func TestHelloEventCarriesServerTime(t *testing.T) {
 func TestDispatchClientEventNotificationAckInvokesSink(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background()) // 构造时发送的 hello
+	pullWritePayload(<-h.Recv(context.Background())) // 构造时发送的 hello
 
 	var got *xiaozhiapi.ClientEventNotificationAck
 	h.notifyAckSink = func(_ context.Context, ack *xiaozhiapi.ClientEventNotificationAck) { got = ack }
@@ -3613,7 +3621,7 @@ func TestDispatchClientEventNotificationAckInvokesSink(t *testing.T) {
 func TestDispatchClientEventNotificationAckWithoutSinkDoesNotError(t *testing.T) {
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background()) // 构造时发送的 hello
+	pullWritePayload(<-h.Recv(context.Background())) // 构造时发送的 hello
 
 	err, quit := h.DispatchClientEvent(context.Background(), &xiaozhiapi.ClientEventNotificationAck{
 		ID:     "reminder-1",
@@ -3662,11 +3670,11 @@ func TestSessionPushesWeatherOnConnect(t *testing.T) {
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
 
 	// 第一条是 hello，随后应推送 weather。
-	hello := (<-h.Recv(context.Background())).(*xiaozhiapi.ServerEventHello)
+	hello := (pullWritePayload(<-h.Recv(context.Background()))).(*xiaozhiapi.ServerEventHello)
 	if hello.Type != xiaozhiapi.ServerEventTypeHello {
 		t.Fatalf("expected hello first, got %s", hello.Type)
 	}
-	event := <-h.Recv(context.Background())
+	event := pullWritePayload(<-h.Recv(context.Background()))
 	weather, ok := event.(*xiaozhiapi.ServerEventWeather)
 	if !ok {
 		t.Fatalf("expected weather event, got %T", event)
@@ -3723,8 +3731,8 @@ func TestSessionWeatherPushUsesDeviceLocationOverride(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background()) // hello
-	event := <-h.Recv(context.Background())
+	pullWritePayload(<-h.Recv(context.Background())) // hello
+	event := pullWritePayload(<-h.Recv(context.Background()))
 	weather, ok := event.(*xiaozhiapi.ServerEventWeather)
 	if !ok {
 		t.Fatalf("expected weather event, got %T", event)
@@ -3749,9 +3757,10 @@ func TestSessionWeatherPushDisabledByDefault(t *testing.T) {
 
 	h := NewHandler(context.Background(), ClientInfo{DeviceID: "device-1"})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background()) // hello
+	pullWritePayload(<-h.Recv(context.Background())) // hello
 	select {
-	case event := <-h.Recv(context.Background()):
+	case raw := <-h.Recv(context.Background()):
+		event := pullWritePayload(raw)
 		if _, ok := event.(*xiaozhiapi.ServerEventWeather); ok {
 			t.Fatal("weather must not be pushed when dashboard_enabled is false")
 		}
@@ -3765,7 +3774,7 @@ func notifySpeakHandler(t *testing.T) *Handler {
 	t.Helper()
 	h := NewHandler(context.Background(), ClientInfo{})
 	t.Cleanup(func() { _ = h.Close(context.Background()) })
-	<-h.Recv(context.Background()) // hello
+	pullWritePayload(<-h.Recv(context.Background())) // hello
 	h.pipeline = voice.NewPipeline(fakeASR{text: "x"}, &modeAwareLLM{}, captureSegmentTTS{})
 	return h
 }
@@ -3776,11 +3785,11 @@ func drainEvents(h *Handler, timeout time.Duration) []any {
 	deadline := time.After(timeout)
 	for {
 		select {
-		case event, ok := <-h.Recv(context.Background()):
+		case raw, ok := <-h.Recv(context.Background()):
 			if !ok {
 				return events
 			}
-			events = append(events, event)
+			events = append(events, pullWritePayload(raw))
 		case <-deadline:
 			return events
 		}
